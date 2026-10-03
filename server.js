@@ -27,6 +27,37 @@ server.on('upgrade', (req, socket, head) => {
 const agents = new Map();
 let nextAgentId = 0;
 
+// Mirror map: hermes session_id -> office agentId (gateway runs the agent,
+// office only mirrors — no duplicate subprocess).
+const sessionToAgent = new Map();
+
+// Webhook secret: set OFFICE_WEBHOOK_SECRET to require it.
+// Empty = localhost only (mature default for local dashboard).
+const WEBHOOK_SECRET = process.env.OFFICE_WEBHOOK_SECRET || '';
+function checkWebhook(req, res) {
+    if (WEBHOOK_SECRET) {
+        const got = req.headers['x-office-secret'] || req.body.secret;
+        if (got !== WEBHOOK_SECRET) return res.status(401).json({ error: 'bad secret' }), false;
+        return true;
+    }
+    const ip = req.ip || req.socket.remoteAddress || '';
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+    return res.status(403).json({ error: 'webhook localhost-only (set OFFICE_WEBHOOK_SECRET to open)' }), false;
+}
+
+// Keep completed agents as readable reports; cap memory.
+function pruneAgents() {
+    const done = [...agents.values()].filter(a => a.status !== 'working')
+        .sort((x, y) => (x.endTime || 0) - (y.endTime || 0));
+    while (done.length > 50) {
+        const old = done.shift();
+        agents.delete(old.id);
+        if (old.sessionId) sessionToAgent.delete(old.sessionId);
+        broadcast({ type: 'agent_removed', agentId: old.id });
+    }
+}
+const lastChars = (s, n) => String(s || '').slice(-n);
+
 // Broadcast to all connected clients
 function broadcast(data) {
     wss.clients.forEach(client => {
@@ -96,12 +127,10 @@ function spawnAgent(agentId, name, role, task, demo = false) {
                 a.logs.push({ timestamp: new Date().toLocaleTimeString('id-ID'), message: `✅ Task selesai dalam ${a.duration}s` });
                 broadcast({
                     type: 'agent_complete',
-                    agent: { id: agentId, name: a.name, status: 'completed', progress: 100, logs: a.logs, duration: a.duration }
+                    agent: { id: agentId, name: a.name, status: 'completed', progress: 100, logs: a.logs, duration: a.duration, output: lastChars(a.output, 4000) }
                 });
-                setTimeout(() => {
-                    agents.delete(agentId);
-                    broadcast({ type: 'agent_removed', agentId });
-                }, 45000);
+                a.endTime = Date.now();
+                pruneAgents(); // report stays, no auto-delete
             }
         }, 2600);
         agent.timer = timer;
@@ -188,18 +217,12 @@ function spawnAgent(agentId, name, role, task, demo = false) {
                 status: agent.status,
                 progress: agent.progress,
                 logs: agent.logs,
-                duration: agent.duration
+                duration: agent.duration,
+                output: lastChars(agent.output, 4000)
             }
         });
-        
-        // Auto-cleanup after 30 seconds
-        setTimeout(() => {
-            agents.delete(agentId);
-            broadcast({
-                type: 'agent_removed',
-                agentId
-            });
-        }, 30000);
+        agent.endTime = Date.now();
+        pruneAgents(); // report stays readable, no auto-delete
     });
 
     return agent;
@@ -329,11 +352,82 @@ wss.on('connection', (ws) => {
     });
 });
 
+// ---- Mirror: agent runs in Hermes gateway, office only displays ----
+function mirrorSpawn(sessionId, platform, text) {
+    const label = platform === 'telegram' ? 'TG' : (platform || 'hermes');
+    const existing = sessionToAgent.get(sessionId);
+    if (existing !== undefined && agents.has(existing)) return agents.get(existing);
+    const agentId = nextAgentId++;
+    // Human name from prompt words ("buatkan laporan ...") not session hash.
+    const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
+    const short = words ? words.slice(0, 24) : sessionId.slice(-4);
+    const agent = {
+        id: agentId, sessionId, mirror: true,
+        name: `${label} ${short}`,
+        role: label === 'TG' ? 'Telegram' : 'Hermes',
+        task: lastChars(text, 500) || '(prompt kosong)',
+        status: 'working', progress: 10, logs: [{
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            message: `📨 Prompt masuk via ${label}`
+        }],
+        output: '', startTime: Date.now()
+    };
+    agents.set(agentId, agent);
+    sessionToAgent.set(sessionId, agentId);
+    broadcast({
+        type: 'agent_spawn',
+        agent: { id: agentId, name: agent.name, role: agent.role, task: agent.task, status: 'working', progress: 10 }
+    });
+    return agent;
+}
+
+function mirrorResult(sessionId, response, status = 'completed') {
+    const agentId = sessionToAgent.get(sessionId);
+    if (agentId === undefined || !agents.has(agentId)) return null;
+    const a = agents.get(agentId);
+    a.status = status;
+    a.progress = status === 'completed' ? 100 : a.progress;
+    a.output = lastChars(response, 4000);
+    a.endTime = Date.now();
+    a.duration = Math.round((a.endTime - a.startTime) / 1000);
+    a.logs.push({ timestamp: new Date().toLocaleTimeString('id-ID'), message: `✅ Respons diterima (${a.duration}s)` });
+    broadcast({
+        type: 'agent_complete',
+        agent: { id: a.id, name: a.name, status: a.status, progress: a.progress, logs: a.logs, duration: a.duration, output: a.output }
+    });
+    pruneAgents();
+    return a;
+}
+
+// Unified hermes event webhook (called by hermes-bridge.js via shell hooks)
+app.post('/webhook/hermes-event', (req, res) => {
+    if (!checkWebhook(req, res)) return;
+    const { event, session_id, platform, text } = req.body || {};
+    if (!event || !session_id) return res.status(400).json({ error: 'event and session_id required' });
+    if (event === 'spawn') {
+        const a = mirrorSpawn(session_id, platform, text);
+        return res.json({ success: true, agentId: a.id, name: a.name });
+    }
+    if (event === 'result') {
+        const a = mirrorResult(session_id, text);
+        if (!a) return res.status(404).json({ error: 'session not mirrored' });
+        return res.json({ success: true, agentId: a.id });
+    }
+    return res.status(400).json({ error: 'unknown event (spawn|result)' });
+});
+
 // Webhook endpoint for Hermes integration
 app.post('/webhook/telegram-agent', (req, res) => {
-    const { name, role, task } = req.body;
+    if (!checkWebhook(req, res)) return;
+    const { name, role, task, session_id, platform } = req.body;
     
     console.log(`📨 Webhook received: ${name} - ${task}`);
+    
+    // session_id present = gateway already runs it → mirror only, no duplicate
+    if (session_id) {
+        const a = mirrorSpawn(session_id, platform || 'telegram', task);
+        return res.json({ success: true, message: `✅ Agent ${a.name} muncul di 3D office!`, agentId: a.id, name: a.name, mirror: true });
+    }
     
     if (!name || !task) {
         return res.status(400).json({ error: 'name and task required' });
@@ -360,7 +454,8 @@ server.listen(PORT, () => {
     console.log(`   GET  /api/agents - List all agents`);
     console.log(`   GET  /api/agent/:id - Get agent details`);
     console.log(`   POST /api/stop/:id - Stop agent`);
-    console.log(`   POST /webhook/telegram-agent - Telegram webhook\n`);
+    console.log(`   POST /webhook/telegram-agent - Telegram webhook`);
+    console.log(`   POST /webhook/hermes-event - Hermes hook bridge (spawn|result)\n`);
 });
 
 // Graceful shutdown

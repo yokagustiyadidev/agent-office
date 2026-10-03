@@ -28,6 +28,23 @@ function nearLane(arr, v) { let b = arr[0]; for (const a of arr) if (Math.abs(a 
 
 const DESK_ROWS = 3, DESK_COLS = 3, DESK_GAP = 4.8;
 
+// Meeting area (conference table) + conversation state
+const MEET_CX = 0, MEET_CZ = -11;
+const MEET_LINES = [
+    'Gimana progres modul auth?',
+    'Testing sudah 80%, besok selesai.',
+    'Setuju, kita rilis bertahap saja.',
+    'Perlu sinkron dengan tim desain.',
+    'Deadline sprint hari Jumat, ya.',
+    'Ada kendala di integrasi API.',
+    'Dokumentasinya saya rapikan.',
+    'Bagus, lanjutkan seperti itu.',
+    'Jadwalkan review sore ini.',
+    'Sepakat, eksekusi mulai besok.'
+];
+const meeting = { active: false, speaker: 0, timer: null };
+const MEET_CHAIRS = [];
+
 let scene, camera, renderer, controls, clock;
 let raycaster, pointer = new THREE.Vector2();
 let downPos = null, hoverDirty = false, lastClient = { x: 0, y: 0 };
@@ -89,7 +106,9 @@ function initScene() {
     controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.minDistance = 3;
+    controls.enablePan = true;
+    controls.screenSpacePanning = true;
+    controls.minDistance = 1.2;
     controls.maxDistance = 40;
     controls.maxPolarAngle = Math.PI / 2.02;
     controls.target.set(0, 1, 0);
@@ -122,6 +141,7 @@ function initScene() {
 
     buildRoom();
     buildDesks();
+    buildMeetingArea();
     buildLights();
     buildPlants();
     initDust();
@@ -132,6 +152,26 @@ function initScene() {
     cv.addEventListener('pointerup', e => {
         if (downPos && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 6) handleClick(e);
         downPos = null;
+    });
+    cv.addEventListener('dblclick', e => {
+        e.preventDefault();
+        const a = agentAt(e);
+        if (a) { focusAgent(a); openModal(a); playClick(); return; }
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(pointer, camera);
+        const hits = raycaster.intersectObjects(scene.children, true);
+        const hit = hits.find(h => h.point.y < 4);
+        if (!hit) return;
+        const dir = camera.position.clone().sub(hit.point).normalize();
+        const dist = Math.max(Math.min(camera.position.distanceTo(hit.point) * 0.45, 6), 2.2);
+        const toPos = hit.point.clone().add(dir.multiplyScalar(dist));
+        toPos.y = Math.max(toPos.y, 1.2);
+        focused = null;
+        document.getElementById('focus-bar').classList.remove('active');
+        flyTo(toPos, hit.point.clone().add(new THREE.Vector3(0, 0.6, 0)));
+        playClick();
     });
     document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); clearFocus(); } });
     window.addEventListener('resize', onResize);
@@ -310,6 +350,125 @@ function buildRoom() {
     const logoText = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 0.08), mat(0xffffff, 0.8, { metalness: 0.1 }));
     logoText.position.set(0, 2, 11.75);
     scene.add(logoText);
+    // Premium coffee bar area (right side)
+    const coffeeBarBase = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.05, 0.8), mat(0x1a1e24, 0.45, { metalness: 0.6 }));
+    coffeeBarBase.position.set(15, 0.525, 8);
+    coffeeBarBase.castShadow = coffeeBarBase.receiveShadow = true;
+    scene.add(coffeeBarBase);
+    
+    const coffeeCounter = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.85), mat(0xd4d8dd, 0.25, { metalness: 0.55 }));
+    coffeeCounter.position.set(15, 1.09, 8);
+    coffeeCounter.castShadow = true;
+    scene.add(coffeeCounter);
+    
+    // Coffee machine
+    const coffeeMachine = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.35), mat(0x2a2e35, 0.35, { metalness: 0.7 }));
+    coffeeMachine.position.set(15.6, 1.4, 8);
+    coffeeMachine.castShadow = true;
+    scene.add(coffeeMachine);
+    
+    // Coffee machine display
+    const machineDisplay = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.15), new THREE.MeshBasicMaterial({ color: 0x2563eb, toneMapped: false }));
+    machineDisplay.position.set(15.6, 1.5, 8.18);
+    scene.add(machineDisplay);
+    
+    // Cups on counter
+    for (let i = 0; i < 3; i++) {
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.04, 0.09, 16), mat(0xf5f7fa, 0.6, { metalness: 0.1 }));
+        cup.position.set(14.5 + i * 0.15, 1.175, 7.8);
+        cup.castShadow = true;
+        scene.add(cup);
+    }
+    
+    // Lounge seating area (left side)
+    const loungeChairMat = mat(0x4a5a6a, 0.8, { metalness: 0.08 });
+    const loungeFrameMat = mat(0x1a1e24, 0.4, { metalness: 0.6 });
+    
+    // Armchair
+    const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.15, 0.85), loungeChairMat);
+    chairSeat.position.set(-15, 0.35, 8);
+    chairSeat.castShadow = true;
+    scene.add(chairSeat);
+    
+    const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.8, 0.15), loungeChairMat);
+    chairBack.position.set(-15, 0.75, 8.35);
+    chairBack.castShadow = true;
+    scene.add(chairBack);
+    
+    // Armrests
+    [-0.45, 0.45].forEach(offset => {
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.7), loungeFrameMat);
+        arm.position.set(-15 + offset, 0.6, 8);
+        arm.castShadow = true;
+        scene.add(arm);
+    });
+    
+    // Coffee table
+    const coffeeTable = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.08, 24), mat(0xd4d8dd, 0.2, { metalness: 0.5 }));
+    coffeeTable.position.set(-15, 0.45, 6.5);
+    coffeeTable.castShadow = coffeeTable.receiveShadow = true;
+    scene.add(coffeeTable);
+    
+    const tableBase = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 0.4, 16), mat(0x2a2e35, 0.4, { metalness: 0.6 }));
+    tableBase.position.set(-15, 0.2, 6.5);
+    tableBase.castShadow = true;
+    scene.add(tableBase);
+    
+    // Wall art gallery (left wall)
+    const artFrameMat = mat(0x1a1e24, 0.5, { metalness: 0.5 });
+    const artColors = [0x2563eb, 0x10b981, 0xf59e0b, 0xef4444, 0x8b5cf6];
+    
+    for (let i = 0; i < 5; i++) {
+        const artCanvas = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.2, 1.2), mat(artColors[i], 0.7, { metalness: 0.15 }));
+        artCanvas.position.set(-17.92, 2.5, -8 + i * 3.5);
+        artCanvas.rotation.y = Math.PI / 2;
+        artCanvas.castShadow = true;
+        scene.add(artCanvas);
+        
+        const artFrame = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.3, 1.3), artFrameMat);
+        artFrame.position.set(-17.88, 2.5, -8 + i * 3.5);
+        artFrame.rotation.y = Math.PI / 2;
+        scene.add(artFrame);
+    }
+    
+    // Digital screen on right wall
+    const screenFrame = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.5, 3.5), mat(0x1a1e24, 0.35, { metalness: 0.7 }));
+    screenFrame.position.set(17.92, 2.8, -5);
+    screenFrame.rotation.y = -Math.PI / 2;
+    screenFrame.castShadow = true;
+    scene.add(screenFrame);
+    
+    const screenDisplay = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 2.3), new THREE.MeshBasicMaterial({ color: 0x0a0e14, toneMapped: false }));
+    screenDisplay.position.set(17.88, 2.8, -5);
+    screenDisplay.rotation.y = -Math.PI / 2;
+    scene.add(screenDisplay);
+    
+    // Screen content - metrics display
+    const metricsBar = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.3), new THREE.MeshBasicMaterial({ color: 0x10b981, toneMapped: false }));
+    metricsBar.position.set(17.86, 2.5, -5);
+    metricsBar.rotation.y = -Math.PI / 2;
+    scene.add(metricsBar);
+
+    // Modern wall clock
+    const clockOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.08, 32), mat(0x1a1e24, 0.4, { metalness: 0.6 }));
+    clockOuter.rotation.x = Math.PI / 2;
+    clockOuter.position.set(0, 4.5, -17.85);
+    clockOuter.castShadow = true;
+    scene.add(clockOuter);
+    
+    const clockFace = new THREE.Mesh(new THREE.CircleGeometry(0.28, 32), mat(0xf5f7fa, 0.85, { metalness: 0.05 }));
+    clockFace.position.set(0, 4.5, -17.82);
+    scene.add(clockFace);
+    
+    // Clock hands
+    const hourHand = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.15, 0.02), mat(0x1a1e24, 0.5, { metalness: 0.5 }));
+    hourHand.position.set(0, 4.5, -17.8);
+    scene.add(hourHand);
+    
+    const minuteHand = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.02), mat(0x1a1e24, 0.5, { metalness: 0.5 }));
+    minuteHand.position.set(0, 4.5, -17.79);
+    scene.add(minuteHand);
+
 
 }
 
@@ -611,6 +770,96 @@ function buildDesks() {
     }
 }
 
+// ---------- meeting area: oval conference table + 6 chairs ----------
+function buildMeetingArea() {
+    const woodMat = mat(0x8a6d4f, 0.45, { metalness: 0.12 });
+    const legMat = mat(0x2a2e35, 0.35, { metalness: 0.65 });
+    const accentMat = mat(0xc9a961, 0.5, { metalness: 0.5 });
+
+    // round rug under meeting zone
+    const rug = new THREE.Mesh(new THREE.CircleGeometry(4.8, 40), mat(0x46536a, 0.96, { metalness: 0.03 }));
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(MEET_CX, 0.028, MEET_CZ);
+    rug.receiveShadow = true;
+    scene.add(rug);
+
+    // oval tabletop
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 2.0, 0.12, 40), woodMat);
+    top.scale.set(1.3, 1, 0.9);
+    top.position.set(MEET_CX, 0.75, MEET_CZ);
+    top.castShadow = top.receiveShadow = true;
+    scene.add(top);
+
+    // gold trim ring
+    const trim = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.025, 10, 48), accentMat);
+    trim.rotation.x = Math.PI / 2;
+    trim.scale.set(1.3, 0.9, 1);
+    trim.position.set(MEET_CX, 0.81, MEET_CZ);
+    scene.add(trim);
+
+    // pedestal base
+    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 0.7, 20), legMat);
+    ped.position.set(MEET_CX, 0.35, MEET_CZ);
+    ped.castShadow = true;
+    scene.add(ped);
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.2, 0.06, 28), legMat);
+    disc.position.set(MEET_CX, 0.03, MEET_CZ);
+    disc.castShadow = true;
+    scene.add(disc);
+
+    // centerpiece: planter + paper stacks
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.13, 0.2, 16), mat(0xf5f7fa, 0.7, { metalness: 0.1 }));
+    pot.position.set(MEET_CX, 0.91, MEET_CZ);
+    pot.castShadow = true;
+    scene.add(pot);
+    const bush = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 10), mat(0x4d8a5e, 0.85));
+    bush.position.set(MEET_CX, 1.1, MEET_CZ);
+    bush.castShadow = true;
+    scene.add(bush);
+    for (let i = 0; i < 3; i++) {
+        const paper = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.012, 0.4), mat(0xf5f7fa, 0.9));
+        const pa = (i / 3) * Math.PI * 2;
+        paper.position.set(MEET_CX + Math.cos(pa) * 1.2, 0.82 + i * 0.005, MEET_CZ + Math.sin(pa) * 0.8);
+        paper.rotation.y = pa;
+        scene.add(paper);
+    }
+
+    // 6 chairs facing the table
+    const chairMat = mat(0x2a3442, 0.8, { metalness: 0.15 });
+    for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+        const x = MEET_CX + Math.cos(a) * 3.0, z = MEET_CZ + Math.sin(a) * 2.4;
+        const g = new THREE.Group();
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.09, 0.58), chairMat);
+        seat.position.y = 0.495; seat.castShadow = true; g.add(seat);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.6, 0.08), chairMat);
+        back.position.set(0, 0.85, -0.3); back.castShadow = true; g.add(back);
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.04, 0.45, 12), legMat);
+        pole.position.y = 0.24; g.add(pole);
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 5), legMat);
+        base.position.y = 0.02; base.castShadow = true; g.add(base);
+        g.position.set(x, 0, z);
+        g.rotation.y = Math.atan2(MEET_CX - x, MEET_CZ - z);
+        scene.add(g);
+        MEET_CHAIRS.push({ x, z });
+    }
+
+    // pendant lamp above the table (light only, no shadow)
+    const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.0, 8), legMat);
+    wire.position.set(MEET_CX, 5.5, MEET_CZ);
+    scene.add(wire);
+    const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.55, 0.5, 20, 1, true), mat(0x1a1e24, 0.4, { metalness: 0.7 }));
+    shade.position.set(MEET_CX, 4.75, MEET_CZ);
+    scene.add(shade);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 12), new THREE.MeshBasicMaterial({ color: 0xffefc4, toneMapped: false }));
+    glow.position.set(MEET_CX, 4.7, MEET_CZ);
+    scene.add(glow);
+    const pl = new THREE.PointLight(0xffefc4, 1.3, 10, 2);
+    pl.position.set(MEET_CX, 4.6, MEET_CZ);
+    pl.castShadow = false;
+    scene.add(pl);
+}
+
 function buildLights() {
     // Premium LED panel ceiling lights
     const panelMat = new THREE.MeshBasicMaterial({ 
@@ -839,6 +1088,7 @@ class Agent3D {
         this.status = data.status || 'idle';
         this.progress = data.progress || 0;
         this.logs = data.logs || [];
+        this.output = data.output || '';
 
         const rc = ROLE_CONFIG[this.role] || ROLE_CONFIG.Developer;
         this.skin = SKINS[this.id % SKINS.length];
@@ -858,6 +1108,9 @@ class Agent3D {
         this.queue = [];
         this.idleT = 2;
         this.wave = 0;
+        this.meeting = false;
+        this.meetLine = '';
+        this.seatIdx = -1;
         // enter through the door, walk the aisles to the seat
         this.group.position.set(10, 0, 13);
         this.target = new THREE.Vector3(desk.x, 0, desk.z + 1.15);
@@ -900,10 +1153,20 @@ class Agent3D {
             envMapIntensity: 0.5
         });
 
-        this.legL = this.limb(0.08, 0.07, 0.85, pantsM);
-        this.legL.position.set(-0.13, 0.425, 0); g.add(this.legL);
-        this.legR = this.limb(0.08, 0.07, 0.85, pantsM);
-        this.legR.position.set(0.13, 0.425, 0); g.add(this.legR);
+        // Hip pivots: rotate at hip (y=0.85), mesh hangs below. Fixes
+        // old bug where leg cylinder rotated around its middle.
+        const mkLeg = side => {
+            const hip = new THREE.Group();
+            hip.position.set(0.13 * side, 0.85, 0);
+            const leg = this.limb(0.08, 0.07, 0.85, pantsM);
+            leg.position.y = -0.425;
+            hip.add(leg);
+            g.add(hip);
+            return { hip, leg };
+        };
+        const legL = mkLeg(-1), legR = mkLeg(1);
+        this.hipL = legL.hip; this.legL = legL.leg;
+        this.hipR = legR.hip; this.legR = legR.leg;
         
         const shoeColors = [0x1a1612, 0x26211c, 0x3a2f28, 0x4a3c2e];
         const shoeColor = shoeColors[this.id % shoeColors.length];
@@ -913,16 +1176,18 @@ class Agent3D {
             metalness: 0.15,
             envMapIntensity: 0.6
         });
-        [-0.13, 0.13].forEach(sx => {
+        this.shoes = [];
+        [[this.hipL, -1], [this.hipR, 1]].forEach(([hip]) => {
             const toe = new THREE.Mesh(new THREE.SphereGeometry(0.068, 12, 10, 0, Math.PI * 2, 0, Math.PI / 2), shoeM);
-            toe.position.set(sx, 0.068, 0.1);
+            toe.position.set(0, -0.782, 0.1);
             toe.rotation.x = Math.PI / 2;
             toe.castShadow = true;
-            g.add(toe);
+            hip.add(toe);
             const base = new THREE.Mesh(new THREE.BoxGeometry(0.135, 0.068, 0.24), shoeM);
-            base.position.set(sx, 0.034, 0.02);
+            base.position.set(0, -0.816, 0.02);
             base.castShadow = true;
-            g.add(base);
+            hip.add(base);
+            this.shoes.push({ m: toe, by: -0.782, bz: 0.1 }, { m: base, by: -0.816, bz: 0.02 });
         });
 
         const torsoGeo = new THREE.CylinderGeometry(0.22, 0.26, 0.62, 20);
@@ -960,55 +1225,52 @@ class Agent3D {
         this.armL = mkArm(-1); 
         this.armR = mkArm(1);
 
+        // Head group: skull + face in ONE pivot so nod/look never
+        // tears the face apart (old bug: only skull rotated).
+        const headG = new THREE.Group();
+        headG.position.y = 1.62;
+        g.add(headG);
+        this.headG = headG;
         const headGeo = new THREE.SphereGeometry(0.145, 28, 24);
         this.head = new THREE.Mesh(headGeo, skinM);
-        this.head.position.y = 1.62; 
         this.head.scale.set(1, 1.1, 0.95);
         this.head.castShadow = true; 
-        g.add(this.head);
+        headG.add(this.head);
 
         const noseGeo = new THREE.SphereGeometry(0.022, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2);
         const nose = new THREE.Mesh(noseGeo, skinM);
-        nose.position.set(0, 1.605, 0.135);
+        nose.position.set(0, -0.015, 0.135);
         nose.rotation.x = -Math.PI / 2;
         nose.scale.set(0.9, 1.2, 1);
-        g.add(nose);
+        headG.add(nose);
 
         const earGeo = new THREE.SphereGeometry(0.032, 10, 8);
         [-1, 1].forEach(side => {
             const ear = new THREE.Mesh(earGeo, skinM);
-            ear.position.set(0.145 * side, 1.62, 0.02);
+            ear.position.set(0.145 * side, 0, 0.02);
             ear.scale.set(0.6, 1, 0.8);
             ear.castShadow = true;
-            g.add(ear);
+            headG.add(ear);
         });
 
-        const hairStyle = this.id % 3;
-        if (hairStyle === 0) {
-            const hair = new THREE.Mesh(new THREE.SphereGeometry(0.152, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.6), hairM);
-            hair.position.y = 1.64; 
-            hair.castShadow = true;
-            g.add(hair);
-        } else if (hairStyle === 1) {
-            const hair = new THREE.Mesh(new THREE.SphereGeometry(0.152, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.65), hairM);
-            hair.position.y = 1.66; 
-            hair.scale.set(1, 0.88, 1); 
-            hair.castShadow = true;
-            g.add(hair);
-            const fringe = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.055, 0.055), hairM);
-            fringe.position.set(0, 1.72, 0.13); 
-            fringe.castShadow = true;
-            g.add(fringe);
-        } else {
-            const hair = new THREE.Mesh(new THREE.SphereGeometry(0.152, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.58), hairM);
-            hair.position.y = 1.64; 
-            hair.castShadow = true;
-            g.add(hair);
-            const bun = new THREE.Mesh(new THREE.SphereGeometry(0.065, 14, 12), hairM);
-            bun.position.set(0, 1.78, -0.09); 
-            bun.castShadow = true; 
-            g.add(bun);
-        }
+        // Cap (one style for all, no hair): crown + brim + button
+        const capM = new THREE.MeshStandardMaterial({
+            color: 0x2e3a4d,
+            roughness: 0.85,
+            metalness: 0.02
+        });
+        const crown = new THREE.Mesh(new THREE.SphereGeometry(0.156, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), capM);
+        crown.position.y = 0.02;
+        crown.scale.set(1, 0.9, 1);
+        crown.castShadow = true;
+        headG.add(crown);
+        const brim = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.022, 0.13), capM);
+        brim.position.set(0, 0.045, 0.2);
+        brim.castShadow = true;
+        headG.add(brim);
+        const capBtn = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 8), capM);
+        capBtn.position.set(0, 0.163, -0.01);
+        headG.add(capBtn);
 
         const eyeWhiteGeo = new THREE.SphereGeometry(0.028, 12, 10);
         const eyeWhiteM = new THREE.MeshStandardMaterial({ color: 0xf8f8f8, roughness: 0.3, metalness: 0.05 });
@@ -1018,29 +1280,29 @@ class Agent3D {
         this.eyes = [];
         [-0.055, 0.055].forEach(ex => {
             const eyeWhite = new THREE.Mesh(eyeWhiteGeo, eyeWhiteM);
-            eyeWhite.position.set(ex, 1.635, 0.125);
+            eyeWhite.position.set(ex, 0.015, 0.125);
             eyeWhite.scale.set(0.85, 1, 0.6);
-            g.add(eyeWhite);
+            headG.add(eyeWhite);
 
             const iris = new THREE.Mesh(new THREE.CircleGeometry(0.016, 16), irisM);
-            iris.position.set(ex, 1.635, 0.145);
-            g.add(iris);
+            iris.position.set(ex, 0.015, 0.145);
+            headG.add(iris);
 
             const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.008, 12), pupilM);
-            pupil.position.set(ex, 1.635, 0.147);
-            g.add(pupil);
+            pupil.position.set(ex, 0.015, 0.147);
+            headG.add(pupil);
 
             const eyeData = { white: eyeWhite, iris, pupil, bx: ex };
             eyeData.white.userData.bx = ex;
             this.eyes.push(eyeData);
         });
 
-        const browM = new THREE.MeshStandardMaterial({ color: this.hairC, roughness: 0.8 });
+        const browM = new THREE.MeshStandardMaterial({ color: 0x2b2118, roughness: 0.8 });
         [-0.055, 0.055].forEach(ex => {
             const brow = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.012, 0.008), browM);
-            brow.position.set(ex, 1.68, 0.135);
+            brow.position.set(ex, 0.06, 0.135);
             brow.rotation.z = ex > 0 ? -0.1 : 0.1;
-            g.add(brow);
+            headG.add(brow);
         });
 
         const mouthCurve = new THREE.Shape();
@@ -1049,8 +1311,8 @@ class Agent3D {
         const mouthGeo = new THREE.ShapeGeometry(mouthCurve);
         const mouthM = new THREE.MeshBasicMaterial({ color: 0x8a5a44, side: THREE.DoubleSide });
         const mouth = new THREE.Mesh(mouthGeo, mouthM);
-        mouth.position.set(0, 1.56, 0.138);
-        g.add(mouth);
+        mouth.position.set(0, -0.06, 0.138);
+        headG.add(mouth);
 
         this.blinkT = 1.5 + Math.random() * 3; 
         this.blinkPhase = 0; 
@@ -1068,18 +1330,18 @@ class Agent3D {
             });
             [-0.055, 0.055].forEach(ex => {
                 const frame = new THREE.Mesh(new THREE.TorusGeometry(0.048, 0.01, 8, 16), glassMat);
-                frame.position.set(ex, 1.635, 0.125);
+                frame.position.set(ex, 0.015, 0.125);
                 frame.rotation.y = Math.PI / 2;
                 frame.castShadow = true;
-                g.add(frame);
+                headG.add(frame);
                 const lens = new THREE.Mesh(new THREE.CircleGeometry(0.046, 20), lensM);
-                lens.position.set(ex, 1.635, 0.126);
-                g.add(lens);
+                lens.position.set(ex, 0.015, 0.126);
+                headG.add(lens);
             });
             const bridge = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.09, 10), glassMat);
-            bridge.position.set(0, 1.635, 0.125);
+            bridge.position.set(0, 0.015, 0.125);
             bridge.rotation.z = Math.PI / 2;
-            g.add(bridge);
+            headG.add(bridge);
         }
 
         const lanyardMat = mat(0x4a6fa5, 0.65, { metalness: 0.1 });
@@ -1162,13 +1424,13 @@ class Agent3D {
         const ctx = this.bubbleCanvas.getContext('2d');
         ctx.clearRect(0, 0, 512, 128);
 
-        if (this.status !== 'working' || !this.task) {
-            this.bubble.visible = false;
-            return;
-        }
+        let snippet = null;
+        if (this.meeting && this.meetLine) snippet = String(this.meetLine).slice(0, 64);
+        else if (this.status === 'working' && this.task) snippet = String(this.task).slice(0, 64);
+        else { this.bubble.visible = false; return; }
 
         this.bubble.visible = true;
-        const taskSnippet = String(this.task).slice(0, 64);
+        const taskSnippet = snippet;
         const revealed = Math.floor(this.bubbleReveal);
         const text = taskSnippet.slice(0, revealed);
         const dots = '.'.repeat(Math.floor(this.bubbleDotPhase % 4));
@@ -1226,8 +1488,13 @@ class Agent3D {
         return lines;
     }
 
-    faceTowards(x, z) {
-        this.group.rotation.y = Math.atan2(x - this.group.position.x, z - this.group.position.z);
+    faceTowards(x, z, dt, rate = 8) {
+        const want = Math.atan2(x - this.group.position.x, z - this.group.position.z);
+        let d = want - this.group.rotation.y;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        // smooth turn (no snap at lane corners); instant only when dt missing
+        this.group.rotation.y += dt ? d * Math.min(1, dt * rate) : d;
     }
     walkTo(x, z) { this.target.set(x, 0, z); }
 
@@ -1257,12 +1524,12 @@ class Agent3D {
             const offsetX = pointer.x * 0.015 * this.lookK;
             const offsetY = pointer.y * 0.008 * this.lookK;
             eyeData.iris.position.x = eyeData.white.userData.bx + offsetX;
-            eyeData.iris.position.y = 1.635 + offsetY;
+            eyeData.iris.position.y = 0.015 + offsetY;
             eyeData.pupil.position.x = eyeData.white.userData.bx + offsetX;
-            eyeData.pupil.position.y = 1.635 + offsetY;
+            eyeData.pupil.position.y = 0.015 + offsetY;
         });
-        this.head.rotation.y = pointer.x * 0.3 * this.lookK;
-        this.head.rotation.x = pointer.y * 0.12 * this.lookK;
+        this.headG.rotation.y = pointer.x * 0.3 * this.lookK;
+        this.headG.rotation.x = pointer.y * 0.12 * this.lookK;
         this.torso.position.x = Math.sin(this.phase * 0.5) * 0.018;
     }
 
@@ -1290,8 +1557,9 @@ class Agent3D {
         this.walking = dist > 0.12;
 
         // Bubble typewriter + animated dots
-        if (this.status === 'working' && this.task) {
-            const taskLen = Math.min(String(this.task).length, 64);
+        const chatSrc = this.meeting ? this.meetLine : (this.status === 'working' ? this.task : null);
+        if (chatSrc) {
+            const taskLen = Math.min(String(chatSrc).length, 64);
             if (this.bubbleReveal < taskLen) {
                 this.bubbleReveal += dt * 18; // ~18 chars/sec
             }
@@ -1302,45 +1570,91 @@ class Agent3D {
         }
 
         if (this.walking) {
-            const speed = this.status === 'working' ? 2.2 : 1.25;
+            const base = this.status === 'working' ? 2.2 : 1.25;
+            // ease-out near waypoint: no abrupt stop
+            const slow = Math.max(0.35, Math.min(1, dist / 1.2));
+            const speed = base * slow;
             pos.x += (dx / dist) * speed * dt;
             pos.z += (dz / dist) * speed * dt;
-            this.faceTowards(this.target.x, this.target.z);
-            this.phase += dt * 10;
-            pos.y = Math.abs(Math.sin(this.phase)) * 0.05;
-            const sw = Math.sin(this.phase) * 0.55;
-            this.legL.rotation.x = sw; this.legR.rotation.x = -sw;
-            this.armL.rotation.x = -sw * 0.7; this.armR.rotation.x = sw * 0.7;
+            this.faceTowards(this.target.x, this.target.z, dt, 6);
+            this.phase += dt * (4 + speed * 2.6);
+            // double-frequency low bob (no hopping) + lean + sway
+            pos.y = Math.abs(Math.cos(this.phase)) * 0.028;
+            const sw = Math.sin(this.phase) * 0.45;
+            this.hipL.rotation.x = sw; this.hipR.rotation.x = -sw;
+            this.armL.rotation.x = -sw * 0.55; this.armR.rotation.x = sw * 0.55;
+            this.armL.rotation.z += (-0.1 - this.armL.rotation.z) * Math.min(dt * 6, 1);
+            this.armR.rotation.z += (0.1 - this.armR.rotation.z) * Math.min(dt * 6, 1);
+            this.torso.rotation.x = 0.05;
+            this.torso.rotation.z = Math.sin(this.phase) * 0.02;
+            (this.shoes || []).forEach(s => {
+                s.m.position.y += (s.by - s.m.position.y) * Math.min(dt * 6, 1);
+                s.m.position.z += (s.bz - s.m.position.z) * Math.min(dt * 6, 1);
+            });
         } else {
             this.phase += dt * 2;
             pos.y *= 0.8;
+            this.torso.rotation.x *= 0.9;
+            this.torso.rotation.z *= 0.9;
             this.updateFace(dt);
             // breathing: torso scale
             const br = 1 + Math.sin(this.phase) * 0.012;
             this.torso.scale.set(br, 1, br);
-            this.legL.rotation.x *= 0.8; this.legR.rotation.x *= 0.8;
+            this.hipL.rotation.x *= 0.8; this.hipR.rotation.x *= 0.8;
 
             if (this.wave > 0) {
                 this.wave -= dt;
                 this.armR.rotation.set(Math.sin(t * 14) * 0.5, 0, -2.1);
                 this.armL.rotation.z = -0.12;
-                this.head.rotation.x = -0.05;
+                this.headG.rotation.x = -0.05;
+            } else if (this.meeting) {
+                this.faceTowards(MEET_CX, MEET_CZ, dt, 4);
+                const ch = (this.seatIdx >= 0 && this.seatIdx < 6 && MEET_CHAIRS[this.seatIdx]) ? MEET_CHAIRS[this.seatIdx] : null;
+                if (ch) {
+                    // sit on assigned chair
+                    const k = Math.min(dt * 4, 1), lk = Math.min(dt * 5, 1);
+                    pos.x += (ch.x - pos.x) * k;
+                    pos.z += (ch.z - pos.z) * k;
+                    pos.y += (-0.30 - pos.y) * k;
+                    this.hipL.rotation.x += (-1.35 - this.hipL.rotation.x) * lk;
+                    this.hipR.rotation.x += (-1.35 - this.hipR.rotation.x) * lk;
+                    (this.shoes || []).forEach(s => {
+                        s.m.position.y += ((s.by + 0.30) - s.m.position.y) * lk;
+                        s.m.position.z += ((s.bz + 0.40) - s.m.position.z) * lk;
+                    });
+                    this.armL.rotation.x += (-0.4 - this.armL.rotation.x) * lk;
+                    this.armR.rotation.x += (-0.4 - this.armR.rotation.x) * lk;
+                    this.headG.rotation.x *= 0.9;
+                } else {
+                    // overflow: stand around the table
+                    const ty = Math.sin(t * 6 + this.phase) * 0.12;
+                    this.armL.rotation.x = -0.25 + ty;
+                    this.armR.rotation.x = -0.25 - ty;
+                    this.headG.rotation.x = 0.02 + Math.sin(t * 2) * 0.02;
+                }
             } else if (this.status === 'working') {
-                this.faceTowards(this.desk.x, this.desk.z);
-                const ty = Math.sin(t * 14 + this.phase) * 0.18;
-                this.armL.rotation.x = -0.95 + ty;
-                this.armR.rotation.x = -0.95 - ty;
-                this.head.rotation.x = 0.12 + Math.sin(t * 3) * 0.03;
+                this.faceTowards(this.desk.x, this.desk.z, dt, 5);
+                // both hands forward to keyboard, small independent taps.
+                // old bug: antisymmetric swing read as one arm pumping back.
+                const tapL = Math.sin(t * 7 + this.phase) * 0.025 + Math.sin(t * 13 + this.phase * 2) * 0.012;
+                const tapR = Math.sin(t * 7.7 + this.phase + 1.3) * 0.025 + Math.sin(t * 11 + this.phase) * 0.012;
+                this.armL.rotation.x = -0.82 + tapL;
+                this.armR.rotation.x = -0.82 + tapR;
+                this.armL.rotation.z = 0.28;
+                this.armR.rotation.z = -0.28;
+                this.headG.rotation.x = 0.14 + Math.sin(t * 3) * 0.02;
             } else {
                 this.armL.rotation.x *= 0.9; this.armR.rotation.x *= 0.9;
-                this.head.rotation.x *= 0.9;
+                this.armL.rotation.z += (-0.1 - this.armL.rotation.z) * 0.1;
+                this.armR.rotation.z += (0.1 - this.armR.rotation.z) * 0.1;
+                this.headG.rotation.x *= 0.9;
             }
             if (this.bounce > 0) {
                 this.bounce -= dt;
                 pos.y = Math.abs(Math.sin(this.bounce * 10)) * 0.12;
             }
-            // non-working agents stroll the aisles
-            if (this.status !== 'working') {
+            // non-working agents stroll the aisles (not while in a meeting)
+            if (this.status !== 'working' && !this.meeting) {
                 this.idleT -= dt;
                 if (this.idleT <= 0) {
                     this.idleT = 2.5 + Math.random() * 4;
@@ -1348,125 +1662,7 @@ class Agent3D {
                         LANE_X[Math.floor(Math.random() * LANE_X.length)],
                         LANE_Z[Math.floor(Math.random() * LANE_Z.length)]
                     );
-    // Premium coffee bar area (right side)
-    const coffeeBarBase = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.05, 0.8), mat(0x1a1e24, 0.45, { metalness: 0.6 }));
-    coffeeBarBase.position.set(15, 0.525, 8);
-    coffeeBarBase.castShadow = coffeeBarBase.receiveShadow = true;
-    scene.add(coffeeBarBase);
-    
-    const coffeeCounter = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.85), mat(0xd4d8dd, 0.25, { metalness: 0.55 }));
-    coffeeCounter.position.set(15, 1.09, 8);
-    coffeeCounter.castShadow = true;
-    scene.add(coffeeCounter);
-    
-    // Coffee machine
-    const coffeeMachine = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.35), mat(0x2a2e35, 0.35, { metalness: 0.7 }));
-    coffeeMachine.position.set(15.6, 1.4, 8);
-    coffeeMachine.castShadow = true;
-    scene.add(coffeeMachine);
-    
-    // Coffee machine display
-    const machineDisplay = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.15), new THREE.MeshBasicMaterial({ color: 0x2563eb, toneMapped: false }));
-    machineDisplay.position.set(15.6, 1.5, 8.18);
-    scene.add(machineDisplay);
-    
-    // Cups on counter
-    for (let i = 0; i < 3; i++) {
-        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.04, 0.09, 16), mat(0xf5f7fa, 0.6, { metalness: 0.1 }));
-        cup.position.set(14.5 + i * 0.15, 1.175, 7.8);
-        cup.castShadow = true;
-        scene.add(cup);
-    }
-    
-    // Lounge seating area (left side)
-    const loungeChairMat = mat(0x4a5a6a, 0.8, { metalness: 0.08 });
-    const loungeFrameMat = mat(0x1a1e24, 0.4, { metalness: 0.6 });
-    
-    // Armchair
-    const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.15, 0.85), loungeChairMat);
-    chairSeat.position.set(-15, 0.35, 8);
-    chairSeat.castShadow = true;
-    scene.add(chairSeat);
-    
-    const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.8, 0.15), loungeChairMat);
-    chairBack.position.set(-15, 0.75, 8.35);
-    chairBack.castShadow = true;
-    scene.add(chairBack);
-    
-    // Armrests
-    [-0.45, 0.45].forEach(offset => {
-        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.7), loungeFrameMat);
-        arm.position.set(-15 + offset, 0.6, 8);
-        arm.castShadow = true;
-        scene.add(arm);
-    });
-    
-    // Coffee table
-    const coffeeTable = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.08, 24), mat(0xd4d8dd, 0.2, { metalness: 0.5 }));
-    coffeeTable.position.set(-15, 0.45, 6.5);
-    coffeeTable.castShadow = coffeeTable.receiveShadow = true;
-    scene.add(coffeeTable);
-    
-    const tableBase = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 0.4, 16), mat(0x2a2e35, 0.4, { metalness: 0.6 }));
-    tableBase.position.set(-15, 0.2, 6.5);
-    tableBase.castShadow = true;
-    scene.add(tableBase);
-    
-    // Wall art gallery (left wall)
-    const artFrameMat = mat(0x1a1e24, 0.5, { metalness: 0.5 });
-    const artColors = [0x2563eb, 0x10b981, 0xf59e0b, 0xef4444, 0x8b5cf6];
-    
-    for (let i = 0; i < 5; i++) {
-        const artCanvas = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.2, 1.2), mat(artColors[i], 0.7, { metalness: 0.15 }));
-        artCanvas.position.set(-17.92, 2.5, -8 + i * 3.5);
-        artCanvas.rotation.y = Math.PI / 2;
-        artCanvas.castShadow = true;
-        scene.add(artCanvas);
-        
-        const artFrame = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.3, 1.3), artFrameMat);
-        artFrame.position.set(-17.88, 2.5, -8 + i * 3.5);
-        artFrame.rotation.y = Math.PI / 2;
-        scene.add(artFrame);
-    }
-    
-    // Digital screen on right wall
-    const screenFrame = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.5, 3.5), mat(0x1a1e24, 0.35, { metalness: 0.7 }));
-    screenFrame.position.set(17.92, 2.8, -5);
-    screenFrame.rotation.y = -Math.PI / 2;
-    screenFrame.castShadow = true;
-    scene.add(screenFrame);
-    
-    const screenDisplay = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 2.3), new THREE.MeshBasicMaterial({ color: 0x0a0e14, toneMapped: false }));
-    screenDisplay.position.set(17.88, 2.8, -5);
-    screenDisplay.rotation.y = -Math.PI / 2;
-    scene.add(screenDisplay);
-    
-    // Screen content - metrics display
-    const metricsBar = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.3), new THREE.MeshBasicMaterial({ color: 0x10b981, toneMapped: false }));
-    metricsBar.position.set(17.86, 2.5, -5);
-    metricsBar.rotation.y = -Math.PI / 2;
-    scene.add(metricsBar);
-
-    // Modern wall clock
-    const clockOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.08, 32), mat(0x1a1e24, 0.4, { metalness: 0.6 }));
-    clockOuter.rotation.x = Math.PI / 2;
-    clockOuter.position.set(0, 4.5, -17.85);
-    clockOuter.castShadow = true;
-    scene.add(clockOuter);
-    
-    const clockFace = new THREE.Mesh(new THREE.CircleGeometry(0.28, 32), mat(0xf5f7fa, 0.85, { metalness: 0.05 }));
-    clockFace.position.set(0, 4.5, -17.82);
-    scene.add(clockFace);
-    
-    // Clock hands
-    const hourHand = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.15, 0.02), mat(0x1a1e24, 0.5, { metalness: 0.5 }));
-    hourHand.position.set(0, 4.5, -17.8);
-    scene.add(hourHand);
-    
-    const minuteHand = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, 0.02), mat(0x1a1e24, 0.5, { metalness: 0.5 }));
-    minuteHand.position.set(0, 4.5, -17.79);
-    scene.add(minuteHand);
-}
+                }
             }
         }
         // tag faces camera automatically (sprite)
@@ -1627,6 +1823,75 @@ function toggleFullscreen() {
     playClick();
 }
 
+// ---------- meeting: gather, converse, disperse ----------
+function meetSpot(i) {
+    if (i < 6 && MEET_CHAIRS[i]) return { x: MEET_CHAIRS[i].x, z: MEET_CHAIRS[i].z };
+    if (i < 6) {
+        const a = (i / 6) * Math.PI * 2;
+        return { x: MEET_CX + Math.cos(a) * 3.3, z: MEET_CZ + Math.sin(a) * 2.6 };
+    }
+    const a = ((i - 6) / 8) * Math.PI * 2 + 0.4;
+    return { x: MEET_CX + Math.cos(a) * 4.6, z: MEET_CZ + Math.sin(a) * 3.8 };
+}
+
+function toggleMeeting() {
+    if (meeting.active) endMeeting();
+    else startMeeting();
+    playClick();
+}
+
+function startMeeting() {
+    if (!agents.size) { addGlobalLog('Belum ada agen untuk rapat.'); return; }
+    meeting.active = true;
+    meeting.speaker = 0;
+    let i = 0;
+    agents.forEach(a => {
+        const idx = i++;
+        const s = meetSpot(idx);
+        a.meeting = true;
+        a.seatIdx = idx;
+        a.meetLine = '';
+        a.bubbleReveal = 0;
+        a.queue.length = 0;
+        a.walkLane(s.x, s.z);
+        a.drawBubble();
+    });
+    document.getElementById('meeting-btn').textContent = 'Bubarkan Rapat';
+    addGlobalLog('Rapat dimulai — semua agen berkumpul di meja rapat.');
+    speakNext();
+    meeting.timer = setInterval(speakNext, 4500);
+}
+
+function speakNext() {
+    if (!meeting.active) return;
+    const gathered = [...agents.values()].filter(a => a.meeting && !a.walking);
+    if (!gathered.length) return;
+    meeting.speaker = (meeting.speaker + 1) % gathered.length;
+    const a = gathered[meeting.speaker];
+    a.meetLine = MEET_LINES[Math.floor(Math.random() * MEET_LINES.length)];
+    a.bubbleReveal = 0;
+    a.bubbleDotPhase = 0;
+    a.drawBubble();
+    a.wave = 0.8;
+}
+
+function endMeeting() {
+    meeting.active = false;
+    if (meeting.timer) { clearInterval(meeting.timer); meeting.timer = null; }
+    agents.forEach(a => {
+        if (!a.meeting) return;
+        a.meeting = false;
+        a.seatIdx = -1;
+        a.meetLine = '';
+        a.drawBubble();
+        a.queue.length = 0;
+        a.walkLane(a.desk.x, a.desk.z + 1.15);
+    });
+    const btn = document.getElementById('meeting-btn');
+    if (btn) btn.textContent = 'Adakan Rapat';
+    addGlobalLog('Rapat selesai — agen kembali ke meja.');
+}
+
 // ---------- websocket ----------
 function connectWS() {
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1660,6 +1925,10 @@ function handleWS({ type, agent, agentId, agents: list }) {
             if (agent.status === 'completed') {
                 stats.completed++;
                 addGlobalLog(`${agent.name} selesai (${agent.duration ?? '?'} dtk)`);
+                showToast(agent, 'completed');
+            } else if (agent.status === 'error') {
+                addGlobalLog(`${agent.name} gagal`);
+                showToast(agent, 'error');
             }
             break;
         case 'agent_removed': {
@@ -1696,11 +1965,12 @@ function updateAgent(data) {
     const taskChanged = data.task && data.task !== a.task;
     a.task = data.task ?? a.task;
     a.logs = data.logs ?? a.logs;
+    a.output = data.output ?? a.output;
     if (taskChanged && a.status === 'working') {
         a.bubbleReveal = 0; // reset typewriter on task change
     }
     a.setStatus(data.status, data.progress);
-    if (data.status === 'working') {
+    if (data.status === 'working' && !a.meeting) {
         const sx = a.desk.x, sz = a.desk.z + 1.15;
         const last = a.queue.length ? a.queue[a.queue.length - 1] : { x: a.target.x, z: a.target.z };
         if (Math.hypot(last.x - sx, last.z - sz) > 0.3) { a.queue.length = 0; a.walkLane(sx, sz); }
@@ -1796,12 +2066,35 @@ function renderAgents() {
 }
 
 function openModal(agent) {
-    document.getElementById('modal-title').textContent = `${agent.name} â€” ${agent.role} (${Math.round(agent.progress)}%)`;
+    document.getElementById('modal-title').textContent = `${agent.name} — ${agent.role} (${Math.round(agent.progress)}%)`;
     const logs = document.getElementById('modal-logs');
-    logs.innerHTML = (agent.logs && agent.logs.length)
+    const out = agent.output ? `<div class="report-block"><div class="report-title">📄 Hasil</div><div class="report-body">${esc(agent.output)}</div></div>` : '';
+    const logHtml = (agent.logs && agent.logs.length)
         ? agent.logs.map(l => `<div class="log-line"><span class="log-timestamp">[${esc(l.timestamp)}]</span><span class="log-message">${esc(l.message)}</span></div>`).join('')
         : '<div class="log-line"><span class="log-message">Belum ada aktivitas.</span></div>';
+    logs.innerHTML = out + logHtml;
     document.getElementById('modal').classList.add('active');
+}
+
+// Completion toast: report visible even when Log tab closed
+function showToast(agent, kind) {
+    let box = document.getElementById('toast-box');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'toast-box';
+        document.body.appendChild(box);
+    }
+    const el = document.createElement('div');
+    el.className = `toast toast-${kind}`;
+    const snippet = (agent.output || '').trim().split('\n').slice(0, 3).join('\n').slice(0, 180);
+    el.innerHTML =
+        `<div class="toast-title">${kind === 'completed' ? '✅' : '❌'} ${esc(agent.name)} ${kind === 'completed' ? 'selesai' : 'gagal'} (${agent.duration ?? '?'} dtk)</div>` +
+        (snippet ? `<div class="toast-snippet">${esc(snippet)}</div>` : '') +
+        `<div class="toast-action">Klik untuk laporan lengkap</div>`;
+    el.onclick = () => { const a = agents.get(agent.id); if (a) { focusAgent(a); openModal(a); } el.remove(); playClick(); };
+    box.appendChild(el);
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 12000);
+    while (box.children.length > 3) box.removeChild(box.firstChild);
 }
 function closeModal() { document.getElementById('modal').classList.remove('active'); }
 document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });

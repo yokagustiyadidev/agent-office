@@ -3,257 +3,505 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Office Dashboard</title>
+    <title>Agent Office 3D</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #0f1218;
+            --panel: #1a1e25;
+            --ink: #f0f2f5;
+            --muted: #a0a6b0;
+            --line: #2a2f38;
+            --accent: #3b82f6;
+            --accent-soft: rgba(59,130,246,0.12);
+            --ok: #10b981;
+            --ok-soft: rgba(16,185,129,0.12);
+            --err: #ef4444;
+            --err-soft: rgba(239,68,68,0.12);
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
             overflow: hidden;
+            color: var(--ink);
+            -webkit-font-smoothing: antialiased;
         }
 
-        #container {
-            display: flex;
-            height: 100vh;
+        #container { display: flex; height: 100vh; }
+        #canvas-container { flex: 1; position: relative; overflow: hidden; background: #1a1d23; }
+        #vignette {
+            position: absolute; inset: 0; pointer-events: none; z-index: 5;
+            background: radial-gradient(ellipse at center, transparent 52%, rgba(0,0,0,0.28) 82%, rgba(0,0,0,0.5) 100%);
+        }
+        #top-scrim {
+            position: absolute; top: 0; left: 0; right: 0; height: 130px; pointer-events: none; z-index: 5;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.38), transparent);
+        }
+        canvas { display: block; transition: filter 0.3s ease; }
+        #canvas-container:hover canvas { filter: brightness(1.02); }
+
+        #hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+        #hud > * { pointer-events: auto; }
+
+        #top-bar {
+            position: absolute; top: 0; left: 0; right: 0;
+            display: flex; justify-content: space-between; align-items: center;
+            height: 56px; padding: 0 16px;
+            background: rgba(13,16,21,0.92);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--line);
+            z-index: 20;
         }
 
-        #office-canvas {
-            flex: 1;
-            background: #f0f0f0;
-            position: relative;
-            overflow: hidden;
+        #brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+        #brand > div { min-width: 0; overflow: hidden; }
+        #brand-mark {
+            width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+            background: var(--accent); color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; font-weight: 800; letter-spacing: -0.5px;
         }
+        #brand-name { font-size: 14px; font-weight: 700; letter-spacing: -0.2px; color: var(--ink); line-height: 1.2; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #env-badge {
+            font-size: 9px; font-weight: 800; letter-spacing: 1.2px;
+            padding: 2px 7px; border-radius: 4px;
+            background: var(--ok-soft); color: var(--ok); border: 1px solid rgba(16,185,129,0.35);
+        }
+        #brand-crumb { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        #top-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        .top-divider { width: 1px; height: 24px; background: var(--line); flex-shrink: 0; }
+
+        #stats { display: flex; gap: 4px; align-items: center; }
+        .stat-item { text-align: right; padding: 4px 12px; min-width: 0; }
+        .stat-value { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+        .stat-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; margin-top: 1px; }
+
+        #connection-status {
+            padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
+            display: flex; align-items: center; gap: 8px; white-space: nowrap;
+            background: rgba(26,29,35,0.75);
+            border: 1px solid rgba(255,255,255,0.06);
+            color: var(--muted);
+            transition: all 0.3s ease;
+        }
+        #connection-status.connected { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.4); color: var(--ok); }
+        #connection-status.disconnected { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.4); color: var(--err); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: pulse 2s ease-in-out infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        #tooltip {
+            position: absolute; display: none; z-index: 30;
+            background: rgba(17,24,39,0.94); color: #f9fafb;
+            font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 8px;
+            pointer-events: none; max-width: 240px; white-space: pre-line;
+        }
+        #tooltip b { font-size: 13px; }
+
+        #boot-error {
+            position: absolute; left: 20px; bottom: 76px; display: none; z-index: 30;
+            background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b;
+            font-size: 12px; line-height: 1.6; padding: 10px 12px; border-radius: 8px;
+            max-width: 420px; white-space: pre-line;
+        }
+
+        #focus-bar {
+            position: absolute; top: 76px; left: 20px; display: none;
+            align-items: center; gap: 10px;
+            background: #1a1d23; border: 1px solid var(--line); border-radius: 10px;
+            padding: 8px 8px 8px 14px; font-size: 13px;
+        }
+        #focus-bar.active { display: flex; }
+        #focus-bar button {
+            border: 1px solid var(--line); background: #242832; border-radius: 7px;
+            padding: 6px 10px; font-size: 12px; cursor: pointer; color: var(--ink);
+        }
+        #focus-bar button:hover { background: #2f3540; }
 
         #sidebar {
-            width: 320px;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 20px;
-            overflow-y: auto;
-            box-shadow: -4px 0 20px rgba(0,0,0,0.1);
+            width: 380px; background: var(--panel);
+            border-left: 1px solid var(--line);
+            display: flex; flex-direction: column; overflow: hidden;
         }
+        .sidebar-header { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
+        .sidebar-title { font-size: 15px; font-weight: 700; }
+        .sidebar-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-        h1 {
-            font-size: 24px;
-            margin-bottom: 20px;
-            color: #333;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 10px;
+        .tabs { display: flex; gap: 4px; padding: 12px 20px 0; border-bottom: 1px solid var(--line); }
+        .tab {
+            flex: 1; padding: 10px 8px; background: transparent; border: none;
+            border-bottom: 2px solid transparent; color: var(--muted);
+            font-size: 12px; font-weight: 600; cursor: pointer;
         }
+        .tab:hover { color: var(--ink); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        .tab-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        .form-group { margin-bottom: 14px; }
+        label { display: block; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+        input, select, textarea {
+            width: 100%; padding: 10px 12px;
+            background: #14161b; border: 1px solid #3a4048; border-radius: 8px;
+            color: var(--ink); font-size: 14px; font-family: inherit;
+        }
+        input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+        textarea { resize: vertical; min-height: 90px; }
+
+        .btn {
+            width: 100%; padding: 13px 16px; border: none; border-radius: 10px;
+            background: var(--accent); color: #fff;
+            font-size: 13px; font-weight: 700; cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .btn:hover { background: #2563eb; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
+        .btn:active { transform: translateY(0); }
+        .btn-secondary { background: rgba(36,40,50,0.6); border: 1px solid rgba(255,255,255,0.08); color: var(--ink); margin-top: 8px; box-shadow: none; }
+        .btn-secondary:hover { background: rgba(47,53,64,0.8); border-color: rgba(255,255,255,0.12); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+
+        .quick-tasks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+        .quick-task {
+            padding: 12px; background: #20242c; border: 1px solid var(--line);
+            border-radius: 10px; cursor: pointer; font-size: 12px; font-weight: 600;
+        }
+        .quick-task:hover { border-color: var(--accent); background: var(--accent-soft); }
+        .quick-task span { display: block; font-weight: 400; color: var(--muted); font-size: 11px; margin-top: 4px; }
 
         .agent-card {
-            background: white;
+            padding: 14px; margin-bottom: 12px; 
+            background: rgba(26,29,35,0.6);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.06); 
+            border-left-width: 3px; 
             border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             cursor: pointer;
-            transition: all 0.3s ease;
-            border-left: 4px solid #ccc;
+            transition: all 0.2s ease;
         }
-
-        .agent-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        .agent-card:hover { 
+            background: rgba(34,38,46,0.8); 
+            border-color: rgba(255,255,255,0.1);
+            transform: translateX(4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
         }
-
-        .agent-card.idle { border-left-color: #95a5a6; }
-        .agent-card.working { border-left-color: #3498db; }
-        .agent-card.completed { border-left-color: #2ecc71; }
-        .agent-card.error { border-left-color: #e74c3c; }
-
-        .agent-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-
+        .agent-card.working { border-left-color: var(--accent); }
+        .agent-card.completed { border-left-color: var(--ok); }
+        .agent-card.error { border-left-color: var(--err); }
+        .agent-card.idle { border-left-color: #9ca3af; }
+        .agent-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
         .agent-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            margin-right: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
+            width: 36px; height: 36px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; font-weight: 700; color: #fff; flex-shrink: 0;
         }
-
-        .agent-info {
-            flex: 1;
-        }
-
-        .agent-name {
-            font-weight: bold;
-            color: #2c3e50;
-            margin-bottom: 2px;
-        }
-
-        .agent-role {
-            font-size: 11px;
-            color: #7f8c8d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .agent-task {
-            font-size: 13px;
-            color: #555;
-            margin-bottom: 8px;
-            line-height: 1.4;
-        }
-
-        .agent-status {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: bold;
-            text-transform: uppercase;
-        }
-
-        .status-idle { background: #ecf0f1; color: #7f8c8d; }
-        .status-working { background: #d6eaf8; color: #2980b9; }
-        .status-completed { background: #d5f4e6; color: #27ae60; }
-        .status-error { background: #fadbd8; color: #c0392b; }
-
-        .agent-progress {
-            margin-top: 8px;
-            height: 4px;
-            background: #ecf0f1;
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .agent-progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #3498db, #2ecc71);
-            width: 0%;
-            transition: width 0.5s ease;
-        }
+        .agent-name { font-weight: 700; font-size: 14px; }
+        .agent-role { font-size: 11px; color: var(--muted); }
+        .agent-task { font-size: 13px; color: #c9ced6; margin-bottom: 8px; line-height: 1.5; }
+        .agent-footer { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+        .agent-status { padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .status-working { background: var(--accent-soft); color: var(--accent); }
+        .status-completed { background: var(--ok-soft); color: var(--ok); }
+        .status-error { background: var(--err-soft); color: var(--err); }
+        .status-idle { background: #2b3038; color: var(--muted); }
+        .agent-progress { height: 4px; background: #2b3038; border-radius: 2px; overflow: hidden; margin-top: 8px; }
+        .agent-progress-bar { height: 100%; background: var(--accent); }
 
         #modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.7);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
+            position: fixed; inset: 0; background: rgba(15,23,42,0.5);
+            display: none; align-items: center; justify-content: center; z-index: 100;
         }
-
-        #modal.active {
-            display: flex;
-        }
-
+        #modal.active { display: flex; }
         .modal-content {
-            background: white;
-            border-radius: 16px;
-            padding: 24px;
-            max-width: 600px;
-            width: 90%;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            width: 90%; max-width: 640px; max-height: 80vh; background: #1a1d23;
+            border-radius: 12px; overflow: hidden; border: 1px solid var(--line);
         }
-
         .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid #ecf0f1;
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 14px 18px; border-bottom: 1px solid var(--line); background: #20242c;
         }
-
+        .modal-title { font-size: 15px; font-weight: 700; }
         .modal-close {
-            background: #e74c3c;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 8px 16px;
+            width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px;
+            background: #242832; cursor: pointer; font-size: 14px;
+        }
+        .modal-close:hover { background: #2f3540; }
+        .modal-body { padding: 18px; max-height: 60vh; overflow-y: auto; }
+        .log-container { background: #111827; border-radius: 8px; padding: 14px; font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.7; }
+        .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .log-timestamp { color: #93c5fd; margin-right: 10px; }
+        .log-message { color: #e5e7eb; }
+
+        #fab {
+            position: absolute; bottom: 24px; left: 20px;
+            padding: 10px 14px; border-radius: 10px;
+            background: #1a1d23; border: 1px solid var(--line);
+            font-size: 12px; font-weight: 600; cursor: pointer; color: var(--ink);
+        }
+        #fab:hover { background: #2f3540; }
+
+        #camera-controls { position: absolute; bottom: 24px; right: 20px; display: flex; gap: 8px; }
+        .cam-btn {
+            padding: 11px 14px; border-radius: 10px; font-size: 12px; font-weight: 600;
+            background: rgba(26,29,35,0.75); 
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.06); 
+            color: var(--ink); 
             cursor: pointer;
-            font-weight: bold;
+            transition: all 0.2s ease;
+        }
+        .cam-btn:hover { 
+            border-color: var(--accent); 
+            color: var(--accent); 
+            background: rgba(59,130,246,0.1);
+            transform: translateY(-2px);
+        }
+        .cam-btn.on { background: rgba(59,130,246,0.15); border-color: var(--accent); color: var(--accent); }
+
+        .hint { font-size: 11px; color: var(--muted); margin-top: 12px; line-height: 1.6; }
+        .empty-state { text-align: center; padding: 48px 16px; color: var(--muted); font-size: 13px; }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #3a4048; border-radius: 4px; }
+
+        @media (max-width: 900px) {
+            #container { flex-direction: column; }
+            #canvas-container { height: 52%; }
+            #sidebar { width: 100%; height: 48%; border-left: none; border-top: 1px solid var(--line); }
+            #camera-controls { right: 12px; bottom: 12px; }
         }
 
-        .modal-close:hover {
-            background: #c0392b;
+        #bdg-map { height: 250px; border-radius: 10px; border: 1px solid var(--line); z-index: 1; }
+        .leaflet-container { background: #14161b; font-family: inherit; }
+        .dist-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+        .dist-chip {
+            padding: 9px 10px; background: rgba(36,40,50,0.6); border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink);
+            transition: all 0.2s ease;
         }
-
-        .log-container {
-            background: #2c3e50;
-            color: #ecf0f1;
-            padding: 16px;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.6;
-            max-height: 400px;
-            overflow-y: auto;
+        .dist-chip:hover { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
+        .dist-chip small { display: block; font-weight: 400; color: var(--muted); font-size: 10px; margin-top: 2px; }
+        #dist-info {
+            margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+            background: rgba(36,40,50,0.6); border: 1px solid rgba(255,255,255,0.06);
+            font-size: 12px; line-height: 1.6;
         }
+        #dist-info b { font-size: 13px; }
+        #dist-info .dist-status { display: inline-block; margin-top: 6px; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--ok-soft); color: var(--ok); }
+        .map-legend { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.6; }
 
-        .log-line {
-            margin-bottom: 4px;
+        #container.sidebar-hidden #sidebar { display: none; }
+        #toast-box { position: fixed; right: 400px; bottom: 24px; z-index: 200; display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+        .toast { background: rgba(17,24,39,0.96); border: 1px solid var(--line); border-left-width: 4px; border-radius: 12px; padding: 12px 14px; cursor: pointer; box-shadow: 0 8px 28px rgba(0,0,0,0.45); animation: toast-in 0.25s ease; }
+        @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+        .toast-completed { border-left-color: var(--ok); }
+        .toast-error { border-left-color: var(--err); }
+        .toast-title { font-size: 13px; font-weight: 700; }
+        .toast-snippet { font-size: 11px; color: var(--muted); margin-top: 6px; white-space: pre-line; max-height: 66px; overflow: hidden; font-family: Consolas, Menlo, monospace; }
+        .toast-action { font-size: 11px; color: var(--accent); margin-top: 6px; font-weight: 600; }
+        .report-block { background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+        .report-title { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+        .report-body { font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.6; color: #e5e7eb; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
+        @media (max-width: 900px) { #toast-box { right: 12px; left: 12px; max-width: none; } }
+        #mini-log {
+            position: absolute; left: 20px; bottom: 70px; width: 330px;
+            background: rgba(15,18,24,0.85); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; z-index: 15;
+            overflow: hidden;
         }
-
-        .log-timestamp {
-            color: #95a5a6;
-            margin-right: 8px;
+        #mini-log.hidden { display: none; }
+        #mini-log-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
         }
-
-        /* Canvas styles */
-        canvas {
-            display: block;
+        #mini-log-header span { color: var(--muted); font-size: 14px; }
+        #mini-log.minimized #mini-log-body { display: none; }
+        #mini-log.minimized #mini-log-header { border-bottom: none; }
+        #mini-log-body { padding: 10px 12px; max-height: 150px; overflow-y: auto; font-family: Consolas, Menlo, monospace; font-size: 11px; line-height: 1.7; }
+        #meeting-btn { margin: 0 0 12px; }
+        @media (max-width: 900px) {
+            #mini-log { left: 12px; width: calc(100% - 24px); }
+            #brand-crumb, #env-badge, .top-divider { display: none; }
+            #top-bar { padding: 0 12px; gap: 8px; }
+            .stat-item { padding: 4px 8px; }
         }
-
-        .desk {
-            position: absolute;
-            width: 80px;
-            height: 80px;
-            background: #34495e;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }
-
-        .desk::after {
-            content: '🖥️';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 32px;
+        @media (max-width: 640px) {
+            #top-actions { gap: 8px; }
+            #stats .stat-item:nth-child(3), #stats .stat-item:nth-child(4) { display: none; }
+            #connection-status span { display: none; }
         }
     </style>
 </head>
 <body>
     <div id="container">
-        <div id="office-canvas">
+        <div id="canvas-container">
             <canvas id="canvas"></canvas>
+            <div id="vignette"></div>
+            <div id="top-scrim"></div>
+            <div id="hud">
+                <div id="top-bar">
+                    <div id="brand">
+                        <div id="brand-mark">AO</div>
+                        <div>
+                            <div id="brand-name">Agent Office <span id="env-badge">PROD</span></div>
+                            <div id="brand-crumb">Mission Control / 3D Office</div>
+                        </div>
+                    </div>
+                    <div id="top-actions">
+                        <div id="connection-status" class="disconnected"><div class="status-dot"></div><span>Terputus</span></div>
+                        <span class="top-divider"></span>
+                        <div id="stats">
+                            <button class="cam-btn" id="sidebar-toggle" onclick="toggleSidebar()" title="Sembunyikan/tampilkan panel">Panel</button>
+                            <div class="stat-item"><div class="stat-value" id="stat-active">0</div><div class="stat-label">Aktif</div></div>
+                            <div class="stat-item"><div class="stat-value" id="stat-completed">0</div><div class="stat-label">Selesai</div></div>
+                            <div class="stat-item"><div class="stat-value" id="stat-total">0</div><div class="stat-label">Total</div></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="focus-bar"><span id="focus-label"></span><button onclick="clearFocus()">Lepas</button></div>
+                <div id="tooltip"></div>
+                <div id="boot-error"></div>
+                <button id="fab" onclick="toggleSound()" title="Suara">Suara: Nyala</button>
+                <div id="mini-log" class="hidden">
+                    <div id="mini-log-header" onclick="toggleMiniLog()">Log<span>&ndash;</span></div>
+                    <div id="mini-log-body"></div>
+                </div>
+                <div id="camera-controls">
+                    <button class="cam-btn" onclick="resetCamera()" title="Tampilan awal">Reset</button>
+                    <button class="cam-btn" id="btn-rotate" onclick="toggleAutoRotate()" title="Putar otomatis">Putar</button>
+                    <button class="cam-btn" onclick="toggleTopView()" title="Tampak atas">Atas</button>
+                    <button class="cam-btn" onclick="toggleFullscreen()" title="Layar penuh">Layar</button>
+                </div>
+            </div>
         </div>
+
         <div id="sidebar">
-            <h1>🏢 Agent Office</h1>
-            <div id="agent-list"></div>
+            <div class="sidebar-header">
+                <div class="sidebar-title">Mission Control</div>
+                <div class="sidebar-subtitle">Deploy dan kelola agen AI</div>
+            </div>
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('spawn')">Spawn</button>
+                <button class="tab" onclick="switchTab('agents')">Agen</button>
+                <button class="tab" onclick="switchTab('logs')">Log</button>
+                <button class="tab" onclick="switchTab('peta'); initBdgMap()">Peta</button>
+            </div>
+            <div class="tab-content">
+                <div id="tab-spawn" class="tab-panel active">
+                    <div class="form-group">
+                        <label>Nama agen</label>
+                        <input type="text" id="agent-name" placeholder="cth: Kiro Dev">
+                    </div>
+                    <div class="form-group">
+                        <label>Peran</label>
+                        <select id="agent-role">
+                            <option value="Developer">Developer</option>
+                            <option value="Designer">Designer</option>
+                            <option value="QA">QA Tester</option>
+                            <option value="DevOps">DevOps</option>
+                            <option value="Manager">Manager</option>
+                            <option value="Security">Security</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Tugas</label>
+                        <textarea id="agent-task" placeholder="Jelaskan tugas agen..."></textarea>
+                    </div>
+                    <button class="btn" onclick="spawnCustomAgent()">Deploy Agen</button>
+                    <button class="btn btn-secondary" onclick="spawnDemoOffice()">Demo: isi satu kantor</button>
+                    <div class="quick-tasks">
+                        <div class="quick-task" onclick="spawnQuick('Code Review', 'Review PR terbaru dan beri masukan')">Code Review<span>Developer &middot; review PR</span></div>
+                        <div class="quick-task" onclick="spawnQuick('Bug Hunter', 'Cari dan perbaiki bug di codebase')">Bug Hunter<span>QA &middot; perbaiki bug</span></div>
+                        <div class="quick-task" onclick="spawnQuick('Doc Writer', 'Perbarui dokumentasi dan README')">Doc Writer<span>Manager &middot; dokumentasi</span></div>
+                        <div class="quick-task" onclick="spawnQuick('Test Runner', 'Jalankan tes dan laporkan hasil')">Test Runner<span>QA &middot; jalankan tes</span></div>
+                    </div>
+                    <p class="hint">Tips 3D: arahkan kursor ke agen untuk info, klik agen untuk fokus, double-klik meja/lantai untuk mendekat, klik lantai kosong atau ESC untuk lepas, drag orbit, klik kanan + drag geser, scroll zoom.</p>
+                </div>
+                <div id="tab-agents" class="tab-panel">
+                    <button class="btn btn-secondary" id="meeting-btn" onclick="toggleMeeting()">Adakan Rapat</button>
+                    <div id="agent-list"><div class="empty-state">Belum ada agen.<br>Deploy agen pertama untuk mulai.</div></div>
+                </div>
+                <div id="tab-logs" class="tab-panel">
+                    <div id="global-logs" class="log-container">
+                        <div class="log-line"><span class="log-timestamp">[--:--:--]</span><span class="log-message">Sistem siap. Menunggu agen...</span></div>
+                    </div>
+                </div>
+                <div id="tab-peta" class="tab-panel">
+                    <div id="bdg-map"></div>
+                    <div id="dist-info"><b>Kota Bandung</b><br>Pilih kecamatan untuk melihat info wilayah operasional.<span class="dist-status">7 area aktif</span></div>
+                    <div class="dist-grid" id="dist-grid"></div>
+                    <p class="map-legend">Basemap: OpenStreetMap &copy; kontributor, tiles CARTO dark. Klik marker atau nama kecamatan untuk detail.</p>
+                </div>
+            </div>
         </div>
     </div>
 
     <div id="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 id="modal-title"></h2>
-                <button class="modal-close" onclick="closeModal()">Tutup</button>
+                <div class="modal-title" id="modal-title">Detail Agen</div>
+                <button class="modal-close" onclick="closeModal()">X</button>
             </div>
-            <div class="log-container" id="modal-logs"></div>
+            <div class="modal-body"><div id="modal-logs" class="log-container"></div></div>
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+    <script src="app3d.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+    // ---------- Peta Kota Bandung (lazy init saat tab dibuka) ----------
+    const BDG_AREAS = [
+        { name: 'Kantor Pusat', kec: 'Alun-alun', lat: -6.9218, lng: 107.6026, desc: 'HQ operasional — semua agen di-deploy dari sini.', status: 'Pusat komando' },
+        { name: 'Coblong', kec: 'Dago', lat: -6.8850, lng: 107.6150, desc: 'Area kampus & startup — cocok untuk agen Developer.', status: 'Aktif' },
+        { name: 'Bandung Wetan', kec: 'Gedung Sate', lat: -6.9050, lng: 107.6200, desc: 'Kawasan bisnis & pemerintahan — fokus agen Manager.', status: 'Aktif' },
+        { name: 'Cibeunying Kidul', kec: 'Pahlawan', lat: -6.8950, lng: 107.6350, desc: 'Area residensial padat — cakupan agen QA lapangan.', status: 'Aktif' },
+        { name: 'Lengkong', kec: 'Buah Batu', lat: -6.9350, lng: 107.6250, desc: 'Koridor komersial — patroli agen Security.', status: 'Aktif' },
+        { name: 'Bojongloa Kaler', kec: 'Kopo', lat: -6.9400, lng: 107.5950, desc: 'Gerbang barat kota — pos agen DevOps & logistik.', status: 'Aktif' },
+        { name: 'Sukasari', kec: 'Setiabudi', lat: -6.8750, lng: 107.6000, desc: 'Area hijau & edukasi — basis agen Designer.', status: 'Aktif' }
+    ];
+    let bdgMap = null, bdgMarkers = [];
+    function showBdgArea(i) {
+        const a = BDG_AREAS[i];
+        if (!a) return;
+        document.getElementById('dist-info').innerHTML =
+            '<b>' + a.name + '</b> &middot; ' + a.kec + '<br>' + a.desc +
+            '<br><span class="dist-status">' + a.status + '</span>';
+        if (bdgMap) bdgMap.flyTo([a.lat, a.lng], 14, { duration: 0.8 });
+    }
+    function initBdgMap() {
+        if (bdgMap) { setTimeout(() => bdgMap.invalidateSize(), 60); return; }
+        if (typeof L === 'undefined') {
+            document.getElementById('dist-info').innerHTML = '<b>Peta gagal dimuat.</b><br>Cek koneksi ke CDN Leaflet lalu buka tab ini lagi.';
+            return;
+        }
+        bdgMap = L.map('bdg-map', { scrollWheelZoom: false }).setView([-6.9175, 107.6191], 12);
+        bdgMap.on('click', () => bdgMap.scrollWheelZoom.enable());
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        }).addTo(bdgMap);
+        BDG_AREAS.forEach((a, i) => {
+            const m = L.marker([a.lat, a.lng]).addTo(bdgMap);
+            m.bindTooltip('<b>' + a.name + '</b>');
+            m.on('click', () => showBdgArea(i));
+            bdgMarkers.push(m);
+        });
+        document.getElementById('dist-grid').innerHTML = BDG_AREAS.map((a, i) =>
+            '<div class="dist-chip" onclick="showBdgArea(' + i + ')">' + a.name + '<small>' + a.kec + '</small></div>'
+        ).join('');
+        setTimeout(() => bdgMap.invalidateSize(), 60);
+    }
+    </script>
 </body>
 </html>

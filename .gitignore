@@ -1,4 +1,9 @@
+# Prevent secrets, deps, and local junk from reaching GitHub
 node_modules/
 *.backup
 *.log
 .env
+sessions/
+*.db
+*.db-shm
+*.db-wal
