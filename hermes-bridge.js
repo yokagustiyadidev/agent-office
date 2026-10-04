@@ -4,6 +4,20 @@
 //       post_llm_call -> office result (completion report).
 // Always prints {} so hook return is ignored. Never blocks: 3s cap.
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+// Load .env dari folder project (jika ada) — kamu isi sendiri setelah clone.
+// Variabel env yang sudah di-set di shell tetap menang atas isi .env.
+try {
+    const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
+    for (const line of envFile.split(/\r?\n/)) {
+        const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+        if (m && process.env[m[1]] === undefined) {
+            process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+        }
+    }
+} catch { /* tanpa .env: pakai bawaan */ }
 
 const OFFICE = process.env.OFFICE_URL || 'http://localhost:3000';
 const SECRET = process.env.OFFICE_WEBHOOK_SECRET || '';

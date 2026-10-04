@@ -36,12 +36,67 @@ Butuh: Node.js 18+ dan CLI [Hermes Agent](https://github.com/anomalyco/hermes-ag
 git clone <repo-url> agent-office-3d
 cd agent-office-3d
 npm install
-cp .env.example .env   # boleh lewati, bawaan sudah jalan di localhost
+cp .env.example .env   # WAJIB diedit — lihat bagian berikutnya
 npm start
 ```
 
 Buka **http://localhost:3000**. Deploy dari tab Spawn, atau klik
 `Demo: isi satu kantor`.
+
+## Konfigurasi — WAJIB edit sendiri setelah fork/clone
+
+Repo ini sengaja **tidak** menyertakan konfigurasi pribadi. Semua yang
+spesifik ke mesin/kebutuhanmu ada di satu file: **`.env`** (tidak ikut
+di-commit — kamu buat sendiri dari `.env.example`):
+
+```bash
+cp .env.example .env
+```
+
+Lalu edit `.env` (editor apa pun). Yang perlu kamu putuskan:
+
+| Variable                | Wajib?                     | Isinya                                    |
+|-------------------------|----------------------------|-------------------------------------------|
+| `PORT`                  | opsional                   | Port dashboard (bawaan 3000)              |
+| `OFFICE_URL`            | kalau bridge beda mesin    | Alamat server kantor untuk `hermes-bridge.js` |
+| `OFFICE_WEBHOOK_SECRET` | kalau terbuka ke LAN/internet | Kata sandi panjang acak                |
+| `OFFICE_ALLOWED_ORIGIN` | opsional                   | Daftar origin browser (koma) yang boleh manggil API |
+
+Selain itu, path hook di **config Hermes** juga harus menunjuk ke folder
+clone milikmu (lihat bagian *Mirror agen Hermes* di bawah) — itu pun
+konfigurasi yang kamu edit sendiri, bukan milik repo.
+
+> Variabel yang sudah di-set di shell/PM2 menang atas isi `.env`.
+
+### Prompt siap-tempel: minta Hermes yang mengkonfigurasi
+
+Setelah clone + `npm install`, tempel prompt ini ke Hermes di folder
+project — dia yang menyematkan hook ke config dan menyiapkan `.env`:
+
+```
+Project ini ada di folder <path/ke/agent-office-3d>. Konfigurasikan
+Agent Office 3D untuk mesin ini:
+
+1. Buat file .env dari .env.example (jangan pernah commit .env).
+2. Isi OFFICE_WEBHOOK_SECRET dengan nilai acak panjang (node -e
+   "console.log(require('crypto').randomBytes(32).toString('hex'))"),
+   OFFICE_URL sesuai alamat server kantor (localhost dulu), dan
+   PORT kalau 3000 sudah dipakai proses lain.
+3. Tambahkan shell hook ke config Hermes ($HERMES_HOME/config.yaml):
+   pre_llm_call dan post_llm_call mengeksekusi
+   `node <path/ke/agent-office-3d>/hermes-bridge.js` (timeout 10).
+   Path harus menunjuk folder clone di mesin ini, bukan path dari README.
+4. Tampilkan config.yaml dan .env yang sudah diedit, lalu jalankan
+   `npm start` (atau pm2 start server.js --name agent) dan verifikasi:
+   `curl http://localhost:<PORT>/api/agents` harus membalas JSON.
+5. Tes end-to-end mirror: jalankan satu prompt Hermes apa pun, lalu
+   `curl http://localhost:<PORT>/api/agents` — harus muncul agen
+   status working/completed bernama `TG …`/`Hermes …`.
+
+Jangan pernah menampilkan nilai OFFICE_WEBHOOK_SECRET di chat;
+cukup konfirmasi terisi. Simpan hook sekali lewat persetujuan Hermes
+(atau hooks_auto_accept hanya untuk mesin milikku sendiri).
+```
 
 ## Mirror agen Hermes milikmu (Telegram / CLI → tampil 3D)
 
@@ -79,7 +134,8 @@ jalan di Hermes — tidak ada kerja ganda).
 |-------------------------|-------------------------|---------------------------------------|
 | `PORT`                  | `3000`                  | Port HTTP + WebSocket                 |
 | `OFFICE_URL`            | `http://localhost:3000` | Alamat server yang dituju bridge      |
-| `OFFICE_WEBHOOK_SECRET` | *(kosong)*              | Kata sandi untuk `/webhook/*`         |
+| `OFFICE_WEBHOOK_SECRET` | *(kosong)*              | Kata sandi untuk `/webhook/*` **dan** `/api/spawn`, `/api/demo`, `/api/stop/:id` |
+| `OFFICE_ALLOWED_ORIGIN` | *(kosong = semua)*      | Batasi origin browser yang boleh manggil API (koma) |
 
 Secret kosong = webhook hanya terima dari **localhost** (aman untuk coba-coba).
 Kalau server bisa diakses dari LAN/internet, wajib isi secret acak yang

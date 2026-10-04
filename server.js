@@ -6,9 +6,28 @@ const path = require('path');
 const cors = require('cors');
 
 const app = express();
+
+// Load .env dari folder project (jika ada) — setelah fork/clone kamu isi sendiri.
+// Variabel env yang sudah di-set di shell/PM2 tetap menang atas isi .env.
+try {
+    const envFile = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
+    for (const line of envFile.split(/\r?\n/)) {
+        const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+        if (m && process.env[m[1]] === undefined) {
+            process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+        }
+    }
+} catch { /* tanpa .env: pakai bawaan */ }
+
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// CORS: tanpa OFFICE_ALLOWED_ORIGIN semua asal dibolehkan (normal untuk
+// dashboard lokal). Isi daftar domain (pisah koma) di .env untuk membatasi.
+const ALLOWED_ORIGIN = process.env.OFFICE_ALLOWED_ORIGIN || '';
+app.use(cors(ALLOWED_ORIGIN ? {
+    origin: ALLOWED_ORIGIN.split(',').map(s => s.trim()).filter(Boolean),
+    credentials: true
+} : {}));
 app.use(express.json());
 app.use(express.static(__dirname));
 
@@ -42,7 +61,13 @@ function checkWebhook(req, res) {
     }
     const ip = req.ip || req.socket.remoteAddress || '';
     if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
-    return res.status(403).json({ error: 'webhook localhost-only (set OFFICE_WEBHOOK_SECRET to open)' }), false;
+    // Dashboard yang disajikan server ini sendiri (same-origin, mis. buka
+    // via IP LAN) tetap boleh; website lain / POST lintas origin ditolak.
+    const origin = req.headers.origin || '';
+    try {
+        if (origin && new URL(origin).host === req.headers.host) return true;
+    } catch { /* origin rusak = tolak */ }
+    return res.status(403).json({ error: 'forbidden (set OFFICE_WEBHOOK_SECRET untuk akses lintas host)' }), false;
 }
 
 // Keep completed agents as readable reports; cap memory.
@@ -230,6 +255,7 @@ function spawnAgent(agentId, name, role, task, demo = false) {
 
 // REST API endpoints
 app.post('/api/spawn', (req, res) => {
+    if (!checkWebhook(req, res)) return;
     const { name, role, task, avatar, demo } = req.body;
     
     if (!name || !task) {
@@ -263,6 +289,7 @@ app.get('/api/agents', (req, res) => {
 
 // Spawn a full office of demo agents at once
 app.post('/api/demo', (req, res) => {
+    if (!checkWebhook(req, res)) return;
     const office = [
         { name: 'Kiro Dev',    role: 'Developer', task: 'Membangun REST API untuk manajemen user' },
         { name: 'Luna Design', role: 'Designer',  task: 'Membuat mockup dashboard analytics' },
@@ -315,6 +342,7 @@ app.get('/api/agent/:id', (req, res) => {
 });
 
 app.post('/api/stop/:id', (req, res) => {
+    if (!checkWebhook(req, res)) return;
     const agentId = parseInt(req.params.id);
     const agent = agents.get(agentId);
     
