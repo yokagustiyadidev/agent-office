@@ -8,8 +8,17 @@ atau tampilkan agen Hermes milikmu sendiri (CLI, Telegram, …) sebagai karakter
 
 ## Fitur
 
-- **Kantor 3D** — suasana siang, manusia proporsional bertopi, meja kerja, meja
-  rapat, tooltip saat hover + klik untuk fokus kamera (cuma butuh Three.js r128)
+- **Kantor 3D** — manusia proporsional bertopi, meja kerja, meja rapat, tooltip
+  saat hover + klik untuk fokus kamera (cuma butuh Three.js r128)
+- **Siklus siang–malam** — slider waktu 00–24 + mode Auto: matahari terbit/tenggelam,
+  langit gradasi (senja, malam berbintang), lampu interior menyala otomatis saat gelap
+- **Detail ruangan** — whiteboard coretan sprint, TV wall berisi status agen live
+  (nama + progress bar), uap kopi dari mesin kopi
+- **Agen hidup** — membawa gelas kopi, sesekali jalan ke coffee bar untuk minum lalu
+  kembali ke meja; speaker rapat mengangguk dan mengangkat gelas
+- **Efek visual** — hover glow, ring progress membesar saat hover, konfeti jatuh saat
+  agen selesai
+- **Grafik aktivitas** — bar chart spawn agen 24 jam terakhir di tab Log
 - **Mode mirror** — setiap prompt Hermes (CLI maupun gateway Telegram) muncul
   sebagai agen 3D lewat shell hook + `hermes-bridge.js`. Agen tetap jalan di
   Hermes, tidak dijalankan dua kali.
@@ -82,6 +91,7 @@ panjang, lalu kirim lewat header `x-office-secret`.
 |------|--------------------------|------------------------------------------------------|
 | POST | `/api/spawn`             | `{name, role, task, demo?}` — kantor menjalankan `hermes chat -q` |
 | GET  | `/api/agents`            | Agen kerja + yang selesai (laporan tersimpan)        |
+| GET  | `/api/activity`          | Histogram spawn per jam, 24 jam terakhir            |
 | GET  | `/api/agent/:id`         | Detail + seluruh `output`                            |
 | POST | `/api/stop/:id`          | Matikan subprocess yang jalan                        |
 | POST | `/webhook/hermes-event`  | `{event: spawn\|result, session_id, platform?, text}` — mirror |
@@ -94,19 +104,33 @@ WebSocket (satu port dengan HTTP): `agent_spawn`, `agent_update`,
 
 ```
 agent-office-3d/
-├── index.html         # seluruh tampilan + CSS (header, sidebar, toast, modal)
-├── app3d.js           # scene Three.js, model/animasi Agent3D, client WS
+├── index.html         # markup (ramping — CSS & JS sudah modular)
+├── css/
+│   └── style.css      # seluruh tampilan (header, sidebar, toast, modal, chart)
+├── js/                # ES modules — tanpa build tool
+│   ├── main.js        # entry point: boot + expose fungsi ke window
+│   ├── config.js      # konstanta & shared state (state.*)
+│   ├── scene.js       # scene Three.js, render loop, kontrol kamera
+│   ├── room.js        # ruangan, meja, lampu, day/night, whiteboard, TV wall
+│   ├── agents.js      # class Agent3D: model manusia, animasi, coffee break
+│   ├── effects.js     # suara, debu matahari, konfeti, steam, siklus keluar
+│   ├── hover.js       # hover tooltip, klik fokus, kamera tween
+│   ├── meeting.js     # adakan/bubarkan rapat
+│   ├── net.js         # WebSocket client + handler event agen
+│   ├── ui.js          # sidebar, tab, modal, toast, log, chart aktivitas, spawn
+│   └── peta.js        # peta Leaflet Bandung (lazy init)
 ├── server.js          # Express + WS + logika spawn/mirror + webhook
 ├── hermes-bridge.js   # penerus hook Hermes → kantor (tanpa dependensi)
 ├── package.json
 └── .env.example
 ```
 
-- Ubah tampilan: blok `<style>` di `index.html` (warna di `--bg --panel --accent …`)
-- Ubah manusia: `Agent3D.buildModel` / `update` di `app3d.js` (poros pinggul,
-  grup kepala `headG`, pose mengetik, siklus jalan)
+- Ubah tampilan: `css/style.css` (warna di `--bg --panel --accent …`)
+- Ubah ruangan/day-night: `js/room.js` (buildRoom, applyTimeOfDay, buildTVWall)
+- Ubah manusia: `js/agents.js` (class `Agent3D` — poros pinggul, grup kepala
+  `headG`, pose mengetik, siklus jalan, coffee break)
 - Ubah API/perilaku: `server.js` (`spawnAgent`, `mirrorSpawn`,
-  `mirrorResult`, `pruneAgents`)
+  `mirrorResult`, `pruneAgents`, `/api/activity`)
 - Jalan permanen: `pm2 start server.js --name agent` (restart otomatis,
   ikut nyala via `pm2 save`)
 
