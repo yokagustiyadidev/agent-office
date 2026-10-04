@@ -24,6 +24,10 @@
             --ok-soft: rgba(16,185,129,0.12);
             --err: #ef4444;
             --err-soft: rgba(239,68,68,0.12);
+            --line-soft: rgba(255,255,255,0.06);
+            --sp: 8px;
+            --sp-lg: 16px;
+            --r: 10px;
         }
 
         body {
@@ -76,19 +80,19 @@
         }
         #brand-crumb { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-        #top-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        #top-actions { display: flex; align-items: center; gap: var(--sp); flex-shrink: 0; }
         .top-divider { width: 1px; height: 24px; background: var(--line); flex-shrink: 0; }
 
-        #stats { display: flex; gap: 4px; align-items: center; }
-        .stat-item { text-align: right; padding: 4px 12px; min-width: 0; }
+        #stats { display: flex; gap: var(--sp); align-items: center; }
+        .stat-item { text-align: right; padding: 4px var(--sp-lg); min-width: 62px; }
         .stat-value { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; line-height: 1.1; font-variant-numeric: tabular-nums; }
         .stat-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; margin-top: 1px; }
 
         #connection-status {
-            padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
+            height: 38px; padding: 0 14px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
             display: flex; align-items: center; gap: 8px; white-space: nowrap;
             background: rgba(26,29,35,0.75);
-            border: 1px solid rgba(255,255,255,0.06);
+            border: 1px solid var(--line-soft);
             color: var(--muted);
             transition: all 0.3s ease;
         }
@@ -130,36 +134,39 @@
             border-left: 1px solid var(--line);
             display: flex; flex-direction: column; overflow: hidden;
         }
-        .sidebar-header { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
+        .sidebar-header { padding: 18px var(--sp-lg) 14px; border-bottom: 1px solid var(--line); }
         .sidebar-title { font-size: 15px; font-weight: 700; }
         .sidebar-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-        .tabs { display: flex; gap: 4px; padding: 12px 20px 0; border-bottom: 1px solid var(--line); }
+        .tabs { display: flex; gap: 4px; padding: 12px var(--sp-lg) 0; border-bottom: 1px solid var(--line); }
         .tab {
             flex: 1; padding: 10px 8px; background: transparent; border: none;
+            border-radius: var(--r) var(--r) 0 0;
             border-bottom: 2px solid transparent; color: var(--muted);
             font-size: 12px; font-weight: 600; cursor: pointer;
         }
         .tab:hover { color: var(--ink); }
-        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab.active { color: var(--accent); background: var(--accent-soft); border-bottom-color: var(--accent); }
 
-        .tab-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+        .tab-content { flex: 1; overflow-y: auto; padding: var(--sp-lg); }
         .tab-panel { display: none; }
         .tab-panel.active { display: block; }
 
-        .form-group { margin-bottom: 14px; }
+        .form-group { margin-bottom: var(--sp-lg); }
         label { display: block; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
         input, select, textarea {
-            width: 100%; padding: 10px 12px;
-            background: #14161b; border: 1px solid #3a4048; border-radius: 8px;
+            width: 100%; height: 38px; padding: 0 14px;
+            background: #14161b; border: 1px solid #3a4048; border-radius: var(--r);
             color: var(--ink); font-size: 14px; font-family: inherit;
         }
         input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
-        textarea { resize: vertical; min-height: 90px; }
+        input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+        textarea { height: auto; resize: vertical; min-height: 90px; padding: 10px 14px; }
 
         .btn {
-            width: 100%; padding: 13px 16px; border: none; border-radius: 10px;
+            width: 100%; height: 38px; padding: 0 14px; border: none; border-radius: var(--r);
             background: var(--accent); color: #fff;
+            display: flex; align-items: center; justify-content: center;
             font-size: 13px; font-weight: 700; cursor: pointer;
             transition: all 0.2s ease;
             box-shadow: 0 1px 3px rgba(0,0,0,0.2);
@@ -214,6 +221,7 @@
         .status-idle { background: #2b3038; color: var(--muted); }
         .agent-progress { height: 4px; background: #2b3038; border-radius: 2px; overflow: hidden; margin-top: 8px; }
         .agent-progress-bar { height: 100%; background: var(--accent); }
+        .agent-place { margin-top: 6px; font-size: 11px; letter-spacing: .02em; color: var(--muted, #8b93a1); }
 
         #modal {
             position: fixed; inset: 0; background: rgba(15,23,42,0.5);
@@ -242,19 +250,30 @@
 
         #fab {
             position: absolute; bottom: 24px; left: 20px;
-            padding: 10px 14px; border-radius: 10px;
+            height: 38px; padding: 0 14px; border-radius: var(--r);
             background: #1a1d23; border: 1px solid var(--line);
+            display: flex; align-items: center;
             font-size: 12px; font-weight: 600; cursor: pointer; color: var(--ink);
         }
         #fab:hover { background: #2f3540; }
 
-        #camera-controls { position: absolute; bottom: 24px; right: 20px; display: flex; gap: 8px; }
+        #camera-controls { position: absolute; bottom: 24px; right: 20px; display: flex; gap: var(--sp); }
+        #time-controls {
+            position: absolute; bottom: 70px; right: 20px;
+            display: flex; align-items: center; gap: 10px;
+            background: rgba(26,29,35,0.75); backdrop-filter: blur(10px);
+            border: 1px solid var(--line-soft); border-radius: var(--r);
+            padding: 8px 12px;
+        }
+        #time-slider { width: 130px; height: 4px; padding: 0; accent-color: var(--accent); cursor: pointer; }
+        #time-label { font-size: 11px; font-weight: 700; color: var(--ink); min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
         .cam-btn {
-            padding: 11px 14px; border-radius: 10px; font-size: 12px; font-weight: 600;
+            height: 38px; padding: 0 14px; border-radius: var(--r); font-size: 12px; font-weight: 600;
             background: rgba(26,29,35,0.75); 
             backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.06); 
+            border: 1px solid var(--line-soft); 
             color: var(--ink); 
+            display: flex; align-items: center; justify-content: center;
             cursor: pointer;
             transition: all 0.2s ease;
         }
@@ -310,23 +329,26 @@
         .report-block { background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
         .report-title { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
         .report-body { font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.6; color: #e5e7eb; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
+        .chart-card { background: rgba(26,29,35,0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+        .chart-title { font-size: 12px; font-weight: 700; margin-bottom: 8px; color: var(--ink); }
+        #activity-chart { width: 100%; height: 120px; display: block; }
         @media (max-width: 900px) { #toast-box { right: 12px; left: 12px; max-width: none; } }
         #mini-log {
-            position: absolute; left: 20px; bottom: 70px; width: 330px;
+            position: absolute; left: 20px; bottom: calc(62px + var(--sp)); width: 330px;
             background: rgba(15,18,24,0.85); backdrop-filter: blur(12px);
-            border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; z-index: 15;
+            border: 1px solid rgba(255,255,255,0.08); border-radius: var(--r); z-index: 15;
             overflow: hidden;
         }
         #mini-log.hidden { display: none; }
         #mini-log-header {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 8px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
+            padding: var(--sp) var(--sp-lg); font-size: 12px; font-weight: 700; cursor: pointer;
+            border-bottom: 1px solid var(--line-soft);
         }
         #mini-log-header span { color: var(--muted); font-size: 14px; }
         #mini-log.minimized #mini-log-body { display: none; }
         #mini-log.minimized #mini-log-header { border-bottom: none; }
-        #mini-log-body { padding: 10px 12px; max-height: 150px; overflow-y: auto; font-family: Consolas, Menlo, monospace; font-size: 11px; line-height: 1.7; }
+        #mini-log-body { padding: 10px var(--sp-lg); max-height: 150px; overflow-y: auto; font-family: Consolas, Menlo, monospace; font-size: 11px; line-height: 1.7; }
         #meeting-btn { margin: 0 0 12px; }
         @media (max-width: 900px) {
             #mini-log { left: 12px; width: calc(100% - 24px); }
@@ -381,6 +403,11 @@
                     <button class="cam-btn" onclick="toggleTopView()" title="Tampak atas">Atas</button>
                     <button class="cam-btn" onclick="toggleFullscreen()" title="Layar penuh">Layar</button>
                 </div>
+                <div id="time-controls">
+                    <button class="cam-btn" id="btn-daynight" onclick="toggleAutoTime()" title="Siklus otomatis siang-malam">Auto</button>
+                    <input type="range" id="time-slider" min="0" max="24" step="0.25" value="13" oninput="setTimeOfDay(parseFloat(this.value))" title="Atur waktu (siang-malam)">
+                    <span id="time-label">13:00</span>
+                </div>
             </div>
         </div>
 
@@ -431,6 +458,10 @@
                     <div id="agent-list"><div class="empty-state">Belum ada agen.<br>Deploy agen pertama untuk mulai.</div></div>
                 </div>
                 <div id="tab-logs" class="tab-panel">
+                    <div class="chart-card">
+                        <div class="chart-title">Aktivitas Spawn — 24 Jam</div>
+                        <canvas id="activity-chart" width="340" height="120"></canvas>
+                    </div>
                     <div id="global-logs" class="log-container">
                         <div class="log-line"><span class="log-timestamp">[--:--:--]</span><span class="log-message">Sistem siap. Menunggu agen...</span></div>
                     </div>
@@ -457,7 +488,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
-    <script src="app3d.js"></script>
+    <script src="app3d.js?v=20261003f"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
     // ---------- Peta Kota Bandung (lazy init saat tab dibuka) ----------

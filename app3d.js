@@ -4,8 +4,13 @@
 //  Three.js r128 + OrbitControls only.
 // ============================================================
 
-const WS_URL = `${location.hostname || 'localhost'}:${location.port || '80'}`;
-const API_URL = `${location.protocol}//${location.hostname || 'localhost'}:${location.port || '80'}`;
+// Bugfix 2026-10-03: fallback '80' selalu menempel saat location.port kosong
+// (domain https tanpa port eksplisit) -> wss://host:80 mustahil, koneksi putus.
+// Sekarang port hanya ditempel bila memang ada.
+const HOST = location.hostname || 'localhost';
+const PORT = location.port ? ':' + location.port : '';
+const WS_URL = HOST + PORT;
+const API_URL = `${location.protocol}//${HOST}${PORT}`;
 
 // Muted shirt colors per role (real fabric tones, not neon)
 const ROLE_CONFIG = {
@@ -55,6 +60,13 @@ let ws;
 let soundOn = true, audioCtx = null;
 let hovered = null, focused = null, camTween = null;
 let dustPts = null, dustVel = [];
+
+// ---------- day/night cycle (Fase 1) ----------
+let ambLight, hemiLight, sunLight, fillLight, rimLight;
+let INTERIOR = null;
+let timeOfDay = 13, autoTime = false;
+let skyMesh = null, skyCanvas = null, skyTex = null;
+let windowGlassMat = null;
 
 // ---------- sound (subtle, off by default? keep on, low volume) ----------
 function beep(freq, dur, type = 'sine', vol = 0.05, when = 0) {
@@ -113,11 +125,12 @@ function initScene() {
     controls.maxPolarAngle = Math.PI / 2.02;
     controls.target.set(0, 1, 0);
 
-    const ambientBase = new THREE.AmbientLight(0xc9d8e6, 0.65);
-    scene.add(ambientBase);
-    
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xe8ded1, 0.4));
-    
+    ambLight = new THREE.AmbientLight(0xc9d8e6, 0.65);
+    scene.add(ambLight);
+
+    hemiLight = new THREE.HemisphereLight(0xffffff, 0xe8ded1, 0.4);
+    scene.add(hemiLight);
+
     const sun = new THREE.DirectionalLight(0xf2e9cf, 0.8);
     sun.position.set(16, 22, 8);
     sun.castShadow = true;
@@ -130,21 +143,40 @@ function initScene() {
     sun.shadow.bias = -0.0001;
     sun.shadow.normalBias = 0.05;
     scene.add(sun);
-    
+    sunLight = sun;
+
     const fill = new THREE.DirectionalLight(0xe6f2ff, 0.4);
     fill.position.set(-14, 16, -10);
     scene.add(fill);
-    
-    const rimLight = new THREE.DirectionalLight(0xffe2cc, 0.25);
-    rimLight.position.set(-10, 8, 14);
-    scene.add(rimLight);
+    fillLight = fill;
+
+    const rimLight2 = new THREE.DirectionalLight(0xffe2cc, 0.25);
+    rimLight2.position.set(-10, 8, 14);
+    scene.add(rimLight2);
+    rimLight = rimLight2;
+
+    // Sky backdrop behind the window wall (day/night gradient, Fase 1)
+    skyCanvas = document.createElement('canvas');
+    skyCanvas.width = 16; skyCanvas.height = 256;
+    skyTex = new THREE.CanvasTexture(skyCanvas);
+    skyTex.encoding = THREE.sRGBEncoding;
+    skyMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(90, 30),
+        new THREE.MeshBasicMaterial({ map: skyTex, depthWrite: false, fog: false })
+    );
+    skyMesh.position.set(0, 8, -24);
+    scene.add(skyMesh);
 
     buildRoom();
     buildDesks();
     buildMeetingArea();
     buildLights();
     buildPlants();
+    buildWhiteboard();
+    buildTVWall();
+    buildCoffeeSteam();
     initDust();
+    applyTimeOfDay();
 
     const cv = renderer.domElement;
     cv.addEventListener('pointermove', e => { lastClient = { x: e.clientX, y: e.clientY }; hoverDirty = true; });
@@ -275,14 +307,15 @@ function buildRoom() {
 
     // Premium floor-to-ceiling windows
     const winFrameMat = mat(0x1a1e24, 0.35, { metalness: 0.7 });
-    const winGlassMat = new THREE.MeshStandardMaterial({ 
-        color: 0x8cb4d9, 
-        roughness: 0.03, 
-        metalness: 0.25, 
-        transparent: true, 
+    const winGlassMat = new THREE.MeshStandardMaterial({
+        color: 0x8cb4d9,
+        roughness: 0.03,
+        metalness: 0.25,
+        transparent: true,
         opacity: 0.5,
         envMapIntensity: 1.5
     });
+    windowGlassMat = winGlassMat;
     
     // Large center window
     const centerWin = new THREE.Group();
@@ -947,6 +980,385 @@ function buildLights() {
     });
 }
 
+// ---------- day/night cycle: collect interior lamps + apply time (Fase 1) ----------
+function collectInterior() {
+    if (INTERIOR) return INTERIOR;
+    INTERIOR = [];
+    scene.traverse(o => {
+        if (o.isPointLight && o !== sunLight && o !== fillLight && o !== rimLight) INTERIOR.push(o);
+    });
+    return INTERIOR;
+}
+
+function skyGradient(hour) {
+    // Returns [top, bottom] colors for the sky at a given hour
+    const stops = {
+        0:  [0x0a0e1a, 0x141a26],
+        5:  [0x1a2340, 0x3d3a55],
+        6:  [0x4a5f8a, 0xd98a5f],
+        8:  [0x7aa8d9, 0xcfe3f2],
+        12: [0x6fa8dc, 0xcfe8f5],
+        17: [0x5f88b8, 0xf2c98a],
+        19: [0x2d3555, 0xc06a4a],
+        20: [0x141c30, 0x2a2438],
+        24: [0x0a0e14, 0x141a26]
+    };
+    const keys = Object.keys(stops).map(Number).sort((a, b) => a - b);
+    let a = keys[0], b = keys[keys.length - 1];
+    for (let i = 0; i < keys.length - 1; i++) {
+        if (hour >= keys[i] && hour <= keys[i + 1]) { a = keys[i]; b = keys[i + 1]; break; }
+    }
+    const k = (hour - a) / Math.max(b - a, 0.001);
+    const mix = (c1, c2) => {
+        const ca = new THREE.Color(c1), cb = new THREE.Color(c2);
+        return ca.lerp(cb, Math.max(0, Math.min(1, k)));
+    };
+    const top = mix(stops[a][0], stops[b][0]);
+    const bottom = mix(stops[a][1], stops[b][1]);
+    return [top, bottom];
+}
+
+function drawSky(hour) {
+    if (!skyCanvas) return;
+    const ctx = skyCanvas.getContext('2d');
+    const [top, bottom] = skyGradient(hour);
+    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, '#' + top.getHexString());
+    grad.addColorStop(1, '#' + bottom.getHexString());
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 16, 256);
+    // Stars at night
+    if (hour < 6 || hour > 19) {
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        let seed = 42;
+        const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+        for (let i = 0; i < 40; i++) {
+            const x = Math.floor(rnd() * 16), y = Math.floor(rnd() * 120);
+            ctx.globalAlpha = 0.3 + rnd() * 0.7;
+            ctx.fillRect(x, y, 1, 1);
+        }
+        ctx.globalAlpha = 1;
+    }
+    skyTex.needsUpdate = true;
+}
+
+// 0..1 how "dark" it is outside (0=full day, 1=midnight)
+function darknessAt(hour) {
+    // dark 19:00–05:30, bright 07:00–17:00, smooth transitions
+    if (hour >= 7 && hour < 17) return 0;
+    if (hour >= 19 || hour < 5) return 1;
+    if (hour >= 17 && hour < 19) return (hour - 17) / 2;
+    return 1 - (hour - 5) / 2; // 5..7
+}
+
+function applyTimeOfDay() {
+    if (!scene || !sunLight) return;
+    const h = timeOfDay % 24;
+    const dark = darknessAt(h);
+    const sunK = Math.max(0, Math.sin(((h - 6) / 12) * Math.PI)); // 0 at 6/18h, 1 at noon
+
+    // Sun position arcs across the sky
+    const ang = ((h - 6) / 12) * Math.PI;
+    sunLight.position.set(Math.cos(ang) * 20, Math.max(2, Math.sin(ang) * 22), 8);
+
+    // Exterior lights fade out at night; interior lamps fade in
+    sunLight.intensity = 0.85 * sunK;
+    sunLight.color.setHSL(0.09, 0.35, 0.5 + sunK * 0.3);
+    fillLight.intensity = 0.4 * (1 - dark * 0.7);
+    rimLight.intensity = 0.25 * (1 - dark);
+    ambLight.intensity = 0.65 - 0.35 * dark;
+    ambLight.color.setHex(dark > 0.5 ? 0x8a93a8 : 0xc9d8e6);
+    hemiLight.intensity = 0.4 * (1 - dark);
+
+    // Interior lamps: brighten as it gets dark
+    const interior = collectInterior();
+    const lampBoost = 0.35 + dark * 1.15;
+    interior.forEach(p => {
+        if (p.userData.baseIntensity === undefined) p.userData.baseIntensity = p.intensity;
+        p.intensity = p.userData.baseIntensity * lampBoost;
+    });
+
+    // Sky + background/fog follow
+    drawSky(h);
+    const skyTop = new THREE.Color(0x0a0e14).lerp(new THREE.Color(0x202429), 1 - dark);
+    scene.background = skyTop;
+    scene.fog.color.copy(skyTop);
+
+    // Window glass tint: bluish by day, dark mirror at night
+    if (windowGlassMat) {
+        windowGlassMat.color.setHex(dark > 0.5 ? 0x1a2433 : 0x8cb4d9);
+        windowGlassMat.opacity = dark > 0.5 ? 0.72 : 0.5;
+    }
+}
+
+function setTimeOfDay(h) {
+    timeOfDay = Math.max(0, Math.min(24, h));
+    autoTime = false;
+    applyTimeOfDay();
+    const label = document.getElementById('time-label');
+    if (label) label.textContent = String(Math.floor(timeOfDay)).padStart(2, '0') + ':00';
+    const btn = document.getElementById('btn-daynight');
+    if (btn) btn.classList.remove('on');
+}
+
+function toggleAutoTime() {
+    autoTime = !autoTime;
+    const btn = document.getElementById('btn-daynight');
+    if (btn) btn.classList.toggle('on', autoTime);
+    playClick();
+    addGlobalLog(autoTime ? 'Waktu otomatis: kantor menyambangi malam & siang.' : 'Waktu otomatis dimatikan.');
+}
+
+// ---------- Fase 2: detail ruang (whiteboard, TV wall status agen, steam kopi) ----------
+let tvCanvas = null, tvTex = null, tvMesh = null;
+let steamPts = null;
+const TV_STATUS = { working: '#3b82f6', completed: '#10b981', error: '#ef4444', idle: '#9ca3af' };
+
+function buildWhiteboard() {
+    // Whiteboard di dinding belakang, samping jendela
+    const g = new THREE.Group();
+    const boardMat = new THREE.MeshStandardMaterial({ color: 0xf5f6f8, roughness: 0.35, metalness: 0.05 });
+    const board = new THREE.Mesh(new THREE.BoxGeometry(4.6, 1.7, 0.06), boardMat);
+    board.position.set(0, 3.0, -17.8);
+    board.castShadow = true;
+    g.add(board);
+
+    // Frame aluminium
+    const frameM = mat(0x9aa2ad, 0.3, { metalness: 0.7 });
+    [[0, 0.88], [0, -0.88]].forEach(([x, y]) => {
+        const h = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.06, 0.07), frameM);
+        h.position.set(0, 3.0 + y, -17.78);
+        g.add(h);
+    });
+    [[-2.32], [2.32]].forEach(([x]) => {
+        const v = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.76, 0.06), frameM);
+        v.position.set(x, 3.0, -17.78);
+        g.add(v);
+    });
+
+    // Coretan (scribbles) via canvas texture — terlihat seperti diagram sprint
+    const cv = document.createElement('canvas');
+    cv.width = 512; cv.height = 192;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#f4f6f8';
+    ctx.fillRect(0, 0, 512, 512);
+    ctx.strokeStyle = '#3b6ea5'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    // garis sprint timeline
+    ctx.beginPath(); ctx.moveTo(40, 60); ctx.lineTo(470, 60); ctx.stroke();
+    // kotak-kotak task
+    ctx.strokeStyle = '#5f8a6e';
+    [[60,90],[150,90],[240,90],[330,90]].forEach(([x, y]) => { ctx.strokeRect(x, y, 60, 36); });
+    // checkmark di dua kotak pertama
+    ctx.strokeStyle = '#2e7d4f'; ctx.lineWidth = 5;
+    [[60,90],[150,90]].forEach(([x, y]) => {
+        ctx.beginPath(); ctx.moveTo(x+14, y+18); ctx.lineTo(x+26, y+30); ctx.lineTo(x+46, y-4); ctx.stroke();
+    });
+    // teks ala tulisan tangan
+    ctx.fillStyle = '#374151'; ctx.font = 'bold 22px "Comic Sans MS", "Segoe Print", cursive, sans-serif';
+    ctx.fillText('Sprint 24 — deploy', 52, 45);
+    ctx.font = '17px "Comic Sans MS", "Segoe Print", cursive, sans-serif';
+    ctx.fillStyle = '#6b7280';
+    ctx.fillText('auth ✓  API ✓  UI ⏳  test ⏳', 90, 160);
+    // magnet merah & biru
+    ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.arc(30, 40, 7, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#3b82f6'; ctx.beginPath(); ctx.arc(482, 150, 7, 0, Math.PI*2); ctx.fill();
+
+    const scribbleTex = new THREE.CanvasTexture(cv);
+    scribbleTex.encoding = THREE.sRGBEncoding;
+    const boardFace = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.5), new THREE.MeshStandardMaterial({ map: scribbleTex, roughness: 0.6 }));
+    boardFace.position.set(0, 3.0, -17.76);
+    boardFace.name = 'whiteboard-face';
+    g.add(boardFace);
+
+    // Tray spidol
+    const tray = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.05, 0.12), frameM);
+    tray.position.set(0, 2.1, -17.72);
+    g.add(tray);
+    ['#ef4444', '#3b82f6', '#111827'].forEach((c, i) => {
+        const marker = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.24, 8), new THREE.MeshStandardMaterial({ color: new THREE.Color(c), roughness: 0.5 }));
+        marker.rotation.z = Math.PI / 2;
+        marker.position.set(-1.2 + i * 0.35, 2.14, -17.72);
+        g.add(marker);
+    });
+
+    g.position.set(-8.5, 0, 0.02);
+    scene.add(g);
+}
+
+function buildTVWall() {
+    // TV wall di dinding kanan: status agen live
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.9, 4.6), mat(0x0d0f13, 0.4, { metalness: 0.6 }));
+    bezel.position.set(17.9, 3.0, 3);
+    bezel.rotation.y = -Math.PI / 2;
+    scene.add(bezel);
+
+    tvCanvas = document.createElement('canvas');
+    tvCanvas.width = 512; tvCanvas.height = 320;
+    tvTex = new THREE.CanvasTexture(tvCanvas);
+    tvTex.encoding = THREE.sRGBEncoding;
+    const screen = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.35, 2.7),
+        new THREE.MeshBasicMaterial({ map: tvTex, toneMapped: false })
+    );
+    screen.position.set(17.8, 3.0, 3);
+    screen.rotation.y = -Math.PI / 2;
+    screen.name = 'tv-wall';
+    scene.add(screen);
+    drawTVWall();
+}
+
+function drawTVWall() {
+    if (!tvCanvas) return;
+    const ctx = tvCanvas.getContext('2d');
+    ctx.fillStyle = '#0a0e14';
+    ctx.fillRect(0, 0, 512, 320);
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 24px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('AGENT STATUS', 24, 40);
+    const now = new Date();
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(now.toLocaleTimeString('id-ID'), 488, 40);
+    ctx.fillText(now.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' }), 488, 60);
+
+    // Rows: agen live (max 7)
+    const list = [...agents.values()].filter(a => a.group || a.status).slice(0, 7);
+    let y = 96;
+    ctx.textAlign = 'left';
+    if (!list.length) {
+        ctx.fillStyle = '#4b5563';
+        ctx.font = '18px system-ui, sans-serif';
+        ctx.fillText('Tidak ada agen aktif…', 24, 130);
+    }
+    list.forEach(a => {
+        const c = STATUS_CSS[a.status] || '#9ca3af';
+        ctx.fillStyle = c;
+        ctx.beginPath(); ctx.arc(34, y - 6, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#e5e7eb';
+        ctx.font = '600 17px system-ui, sans-serif';
+        ctx.fillText(String(a.name).slice(0, 14), 50, y);
+        // progress bar
+        ctx.fillStyle = '#1f2937';
+        ctx.fillRect(250, y - 14, 180, 12);
+        ctx.fillStyle = c;
+        ctx.fillRect(250, y - 14, 180 * Math.min(1, (a.progress || 0) / 100), 12);
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '13px system-ui, sans-serif';
+        ctx.fillText(Math.round(a.progress || 0) + '%', 442, y - 2);
+        y += 32;
+    });
+    tvTex.needsUpdate = true;
+}
+
+// refresh TV wall tiap 3 detik + saat status berubah
+setInterval(() => { if (typeof drawTVWall === 'function' && scene) drawTVWall(); }, 3000);
+
+// ---------- Fase 4: konfeti saat agen selesai ----------
+const confetti = { list: [] };
+
+function spawnConfetti(pos3) {
+    const N = 60;
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(N * 3);
+    const colors = new Float32Array(N * 3);
+    const palette = [0x3b82f6, 0x10b981, 0xf59e0b, 0xef4444, 0x8b5cf6, 0xf472b6];
+    const parts = [];
+    for (let i = 0; i < N; i++) {
+        positions[i*3] = pos3.x + (Math.random() - 0.5) * 0.4;
+        positions[i*3+1] = 2.2 + Math.random() * 0.6;
+        positions[i*3+2] = pos3.z + (Math.random() - 0.5) * 0.4;
+        const c = new THREE.Color(palette[i % palette.length]);
+        colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
+        parts.push({
+            vx: (Math.random() - 0.5) * 1.6,
+            vy: 1.8 + Math.random() * 2.2,
+            vz: (Math.random() - 0.5) * 1.6,
+            life: 1.6 + Math.random() * 0.8
+        });
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const mat2 = new THREE.PointsMaterial({
+        size: 0.07, vertexColors: true, transparent: true, opacity: 0.95,
+        depthWrite: false, sizeAttenuation: true
+    });
+    const pts = new THREE.Points(geo, mat2);
+    pts.frustumCulled = false;
+    scene.add(pts);
+    confetti.list.push({ pts, parts, age: 0 });
+}
+
+function updateConfetti(dt) {
+    for (let k = confetti.list.length - 1; k >= 0; k--) {
+        const c = confetti.list[k];
+        c.age += dt;
+        const arr = c.pts.geometry.attributes.position.array;
+        let alive = 0;
+        for (let i = 0; i < c.parts.length; i++) {
+            const p = c.parts[i];
+            p.life -= dt;
+            if (p.life > 0) {
+                alive++;
+                p.vy -= 4.5 * dt;         // gravitasi
+                arr[i*3] += p.vx * dt;
+                arr[i*3+1] += p.vy * dt;
+                arr[i*3+2] += p.vz * dt;
+                if (arr[i*3+1] < 0.05) { arr[i*3+1] = 0.05; p.vy = 0; p.vx *= 0.6; p.vz *= 0.6; }
+            }
+        }
+        c.pts.material.opacity = Math.max(0, 0.95 * (1 - c.age / 2.6));
+        c.pts.geometry.attributes.position.needsUpdate = true;
+        if (c.age > 2.6 || !alive) {
+            scene.remove(c.pts);
+            c.pts.geometry.dispose();
+            c.pts.material.dispose();
+            confetti.list.splice(k, 1);
+        }
+    }
+}
+
+let steamParticles = null, steamData = null;
+
+function buildCoffeeSteam() {
+    // Uap dari mesin kopi (coffee machine di 15.6, 1.4, 8)
+    const N = 26;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(N * 3);
+    steamData = [];
+    for (let i = 0; i < N; i++) {
+        pos[i*3] = 15.6 + (Math.random() - 0.5) * 0.08;
+        pos[i*3+1] = 1.75 + Math.random() * 0.6;
+        pos[i*3+2] = 8 + (Math.random() - 0.5) * 0.08;
+        steamData.push({ seed: Math.random() * Math.PI * 2, speed: 0.25 + Math.random() * 0.4 });
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const m = new THREE.PointsMaterial({
+        color: 0xdfe6ee, size: 0.05, transparent: true, opacity: 0.3,
+        depthWrite: false, sizeAttenuation: true
+    });
+    steamParticles = new THREE.Points(geo, m);
+    steamParticles.name = 'coffee-steam';
+    scene.add(steamParticles);
+}
+
+function updateSteam(dt, t) {
+    if (!steamParticles || !steamData) return;
+    const arr = steamParticles.geometry.attributes.position.array;
+    for (let i = 0; i < steamData.length; i++) {
+        const s = steamData[i];
+        arr[i*3+1] += s.speed * dt * 0.5;
+        arr[i*3] += Math.sin(t * 2 + s.seed) * dt * 0.03;
+        if (arr[i*3+1] > 2.6) {
+            arr[i*3+1] = 1.75;
+            arr[i*3] = 15.6 + (Math.random() - 0.5) * 0.08;
+            arr[i*3+2] = 8 + (Math.random() - 0.5) * 0.08;
+        }
+    }
+    steamParticles.geometry.attributes.position.needsUpdate = true;
+}
+
 function buildPlants() {
     const potMat = mat(0x8a7d6f, 0.65, { metalness: 0.15 });
     const leafMat = mat(0x3d6642, 0.82, { metalness: 0.06 });
@@ -1078,6 +1490,72 @@ function initDust() {
     scene.add(dustPts);
 }
 
+// Penanda keluar: agen yang selesai berjalan keluar lewat pintu (10,13),
+// lalu mesh-nya baru dibuang setelah sampai di luar (rekornya tetap di sidebar).
+const DOOR_X = 10, DOOR_Z = 13;
+const EXIT_AFTER_DONE = 4000;   // jeda setelah selesai (beri waktu toast) sebelum berjalan keluar
+const EXIT_WALK_MS    = 30000;  // pengaman terakhir kalau perjalanan keluar tak rampung
+const EXIT_OUT_Z      = 21;     // dianggap di luar saat z sudah melewati ini
+
+function findAgent(id) {
+    if (agents.has(id)) return agents.get(id);
+    for (const a of agents.values()) if (a.id === id) return a;
+    return null;
+}
+
+// jadwalkan satu kali saja; agen "berangkat" padahal keluar kantor cuma 10 detik.
+function scheduleExit(id) {
+    const a = findAgent(id);
+    if (!a || a.exitPending || a.exitWalk || a.disposed) return;
+    a.exitPending = true;
+    setTimeout(() => begExit(id), EXIT_AFTER_DONE);
+}
+
+function begExit(id) {
+    const a = findAgent(id);
+    if (!a || a.exitWalk || a.disposed) return;
+    if (a.meeting) {
+        // keluar dari rapat secara individual (endMeeting() untuk seluruh rapat)
+        a.meeting = false;
+        a.seatIdx = -1;
+        a.meetLine = '';
+        a.drawBubble();
+    }
+    a.exitWalk = true;
+    a.exitPending = false;
+    a.bubbleReveal = 0;
+    a.queue.length = 0;
+    a.gone = true;                 // sengaja keluar — bukan bug posisi
+    a.walking = false;
+    a.walkLane(DOOR_X, DOOR_Z);    // rute Manhattan ke pintu (target + queue diisi di sini)
+    a.queue.push({ x: DOOR_X, z: EXIT_OUT_Z });   // lanjut lurus keluar melewati pintu
+    a.faceTowards(DOOR_X, DOOR_Z);
+    if (focused === a) clearFocus();
+    if (hovered === a) { if (a.shirtMat) a.shirtMat.emissive.setHex(0x000000); hovered = null; }
+    addGlobalLog(`${a.name} keluar kantor`);
+
+    // pengaman terakhir: kalau logika jalan tersendat, tetap dibuang setelah batas waktu
+    a.exitWatchdog = setTimeout(() => finishExit(id), EXIT_WALK_MS);
+}
+
+function finishExit(id) {
+    const a = findAgent(id);
+    if (!a || a.disposed) return;
+    if (a.exitWatchdog) { clearTimeout(a.exitWatchdog); a.exitWatchdog = null; }
+    if (focused === a) clearFocus();
+    if (hovered === a) { if (a.shirtMat) a.shirtMat.emissive.setHex(0x000000); hovered = null; }
+    a.dispose();               // hanya mesh yang dibuang
+    a.exited = true;           // record + laporan tetap ada di sidebar
+    renderAgents();
+}
+
+// typewriter bubble: saat agen sedang keluar, tampilkan pesan perpisahan
+// (bukan task-nya lagi) supaya "keluar kantor" terlihat jelas di ruangan.
+function exitBubbleText(a) {
+    if (!a) return null;
+    return a.exitPending ? 'Selesai ✅' : (a.exitWalk ? 'Keluar kantor…' : null);
+}
+
 // ---------- agent: proportional human ~1.7m ----------
 class Agent3D {
     constructor(data) {
@@ -1089,6 +1567,9 @@ class Agent3D {
         this.progress = data.progress || 0;
         this.logs = data.logs || [];
         this.output = data.output || '';
+        this.exitPending = false;
+        this.exitWalk = false;
+        this.exitWatchdog = null;
 
         const rc = ROLE_CONFIG[this.role] || ROLE_CONFIG.Developer;
         this.skin = SKINS[this.id % SKINS.length];
@@ -1107,6 +1588,7 @@ class Agent3D {
         desk.occupant = this;
         this.queue = [];
         this.idleT = 2;
+        this.disposed = false;
         this.wave = 0;
         this.meeting = false;
         this.meetLine = '';
@@ -1406,6 +1888,33 @@ class Agent3D {
         this.bubbleText = '';
         this.bubbleReveal = 0;
         this.bubbleDotPhase = 0;
+
+        // ---- Fase 3: gelas kopi di tangan kanan (visible saat bawa kopi) ----
+        const cupM = new THREE.MeshStandardMaterial({ color: 0xf5f7fa, roughness: 0.5, metalness: 0.08 });
+        const coffeeM = new THREE.MeshStandardMaterial({ color: 0x4a2c1a, roughness: 0.3, metalness: 0.1 });
+        const cup = new THREE.Group();
+        const cupBody = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.038, 0.09, 14), cupM);
+        cupBody.castShadow = true;
+        cup.add(cupBody);
+        const coffee = new THREE.Mesh(new THREE.CircleGeometry(0.04, 14), coffeeM);
+        coffee.rotation.x = -Math.PI / 2;
+        coffee.position.y = 0.045;
+        cup.add(coffee);
+        // handle kecil
+        const handle = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.007, 8, 14), cupM);
+        handle.rotation.y = Math.PI / 2;
+        handle.position.x = 0.05;
+        cup.add(handle);
+        cup.position.set(0, -0.72, 0.02);  // di posisi tangan kanan
+        cup.rotation.x = -0.35;
+        this.cup = cup;
+        this.armR.add(cup);
+        this.carrying = false;      // bawa kopi?
+        this.cupVisible = false;
+        this.cup.visible = false;
+        this.coffeeBreakT = 8 + Math.random() * 14;   // waktu sampai ngopi berikutnya
+        this.coffeeBreak = null;    // {phase: 'walk'|'drink'|'back'}
+        this.nodT = 0;              // Fase 3: angguk saat bicara di meeting
     }
 
     drawRing() {
@@ -1539,7 +2048,11 @@ class Agent3D {
         if (progress !== undefined && progress !== null) this.progress = progress;
         this.drawRing();
         if (status !== 'working') this.idleT = 1;
-        if (status === 'completed' && prev !== 'completed') { this.bounce = 0.6; playComplete(); }
+        if (status === 'completed' && prev !== 'completed') {
+            this.bounce = 0.6; playComplete(); scheduleExit(this.id);
+            // Fase 4: konfeti di posisi agen
+            if (this.group && typeof spawnConfetti === 'function') spawnConfetti(this.group.position);
+        }
         if (status === 'working' && prev !== 'working') {
             this.bubbleReveal = 0; // reset typewriter
         }
@@ -1547,6 +2060,7 @@ class Agent3D {
     }
 
     update(dt, t) {
+        if (this.disposed) return;
         const pos = this.group.position;
         if (Math.hypot(this.target.x - pos.x, this.target.z - pos.z) <= 0.12 && this.queue.length) {
             const n = this.queue.shift();
@@ -1557,7 +2071,7 @@ class Agent3D {
         this.walking = dist > 0.12;
 
         // Bubble typewriter + animated dots
-        const chatSrc = this.meeting ? this.meetLine : (this.status === 'working' ? this.task : null);
+        const chatSrc = this.meeting ? this.meetLine : exitBubbleText(this);
         if (chatSrc) {
             const taskLen = Math.min(String(chatSrc).length, 64);
             if (this.bubbleReveal < taskLen) {
@@ -1570,7 +2084,8 @@ class Agent3D {
         }
 
         if (this.walking) {
-            const base = this.status === 'working' ? 2.2 : 1.25;
+            // agen yang keluar berjalan santai, agen kerja cepat, sisanya santai
+            const base = this.exitWalk ? 1.35 : (this.status === 'working' ? 2.2 : 1.25);
             // ease-out near waypoint: no abrupt stop
             const slow = Math.max(0.35, Math.min(1, dist / 1.2));
             const speed = base * slow;
@@ -1625,11 +2140,23 @@ class Agent3D {
                     this.armL.rotation.x += (-0.4 - this.armL.rotation.x) * lk;
                     this.armR.rotation.x += (-0.4 - this.armR.rotation.x) * lk;
                     this.headG.rotation.x *= 0.9;
+                    // Fase 3: nod saat jadi speaker
+                    if (this.nodT > 0) {
+                        this.nodT -= dt;
+                        this.headG.rotation.x = Math.sin(t * 8) * 0.14;
+                    }
                 } else {
-                    // overflow: stand around the table
+                    // overflow: stand around the table, angkat gelas saat bicara
                     const ty = Math.sin(t * 6 + this.phase) * 0.12;
                     this.armL.rotation.x = -0.25 + ty;
-                    this.armR.rotation.x = -0.25 - ty;
+                    if (this.meetLine && this.bubbleReveal < String(this.meetLine).length) {
+                        // bicara: angkat gelas ke arah meja
+                        this.armR.rotation.x = -1.8 + Math.sin(t * 4) * 0.08;
+                        this.armR.rotation.z = -0.45;
+                    } else {
+                        this.armR.rotation.x = -0.25 - ty;
+                        this.armR.rotation.z += (0.1 - this.armR.rotation.z) * 0.1;
+                    }
                     this.headG.rotation.x = 0.02 + Math.sin(t * 2) * 0.02;
                 }
             } else if (this.status === 'working') {
@@ -1653,8 +2180,55 @@ class Agent3D {
                 this.bounce -= dt;
                 pos.y = Math.abs(Math.sin(this.bounce * 10)) * 0.12;
             }
+
+            // ---- Fase 3: coffee break berkala (hanya agen working, bukan meeting/exit) ----
+            if (this.coffeeBreak) {
+                const cb = this.coffeeBreak;
+                if (cb.phase === 'walk') {
+                    // sampai di coffee bar? berhenti & minum
+                    const d = Math.hypot(14.6 - pos.x, 7.2 - pos.z);
+                    if (d < 0.5) {
+                        cb.phase = 'drink';
+                        cb.t = 2.5 + Math.random() * 2.5;
+                    }
+                } else if (cb.phase === 'drink') {
+                    cb.t -= dt;
+                    // pose minum: tangan kanan ke mulut
+                    this.armR.rotation.x = -2.2 + Math.sin(t * 3) * 0.06;
+                    this.armR.rotation.z = -0.5;
+                    this.headG.rotation.x = -0.12;
+                    if (cb.t <= 0) {
+                        cb.phase = 'back';
+                        this.carrying = false;
+                        this.walkLane(this.desk.x, this.desk.z + 1.15);
+                        this.faceTowards(this.desk.x, this.desk.z, dt, 8);
+                    }
+                } else if (cb.phase === 'back') {
+                    if (!this.walking) {
+                        this.coffeeBreak = null;
+                        this.coffeeBreakT = 20 + Math.random() * 25;
+                        this.cup.visible = false;
+                    }
+                }
+            } else if (this.status === 'working' && !this.walking) {
+                this.coffeeBreakT -= dt;
+                if (this.coffeeBreakT <= 0) {
+                    // mulai ngopi: jalan ke coffee bar bawa gelas
+                    this.coffeeBreak = { phase: 'walk' };
+                    this.carrying = true;
+                    this.cup.visible = true;
+                    this.walkLane(14.6, 7.2);
+                    this.faceTowards(15.6, 8, dt, 8);
+                }
+            }
+
+            // cup ikut tangan (naik-turun halus saat jalan)
+            if (this.cup && this.cup.visible) {
+                this.cup.rotation.z = Math.sin(this.phase) * 0.08;
+            }
+
             // non-working agents stroll the aisles (not while in a meeting)
-            if (this.status !== 'working' && !this.meeting) {
+            if (this.status !== 'working' && this.status !== 'completed' && this.status !== 'error' && !this.meeting) {
                 this.idleT -= dt;
                 if (this.idleT <= 0) {
                     this.idleT = 2.5 + Math.random() * 4;
@@ -1665,10 +2239,14 @@ class Agent3D {
                 }
             }
         }
+        // agen yang keluar: setelah benar-benar melewati pintu, mesh-nya dibuang
+        if (this.exitWalk && pos.z >= EXIT_OUT_Z) { finishExit(this.id); return; }
         // tag faces camera automatically (sprite)
     }
 
     dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
         if (this.desk) this.desk.occupant = null;
         scene.remove(this.group);
         this.group.traverse(o => {
@@ -1684,7 +2262,7 @@ function agentAt(e) {
     pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObjects([...agents.values()].map(a => a.group), true);
+    const hits = raycaster.intersectObjects([...agents.values()].filter(a => a.group).map(a => a.group), true);
     if (!hits.length) return null;
     const id = hits[0].object.userData.agentId;
     return agents.get(id) || null;
@@ -1695,12 +2273,13 @@ function doHover() {
     pointer.x = ((lastClient.x - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((lastClient.y - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObjects([...agents.values()].map(a => a.group), true);
+    const hits = raycaster.intersectObjects([...agents.values()].filter(a => a.group).map(a => a.group), true);
     const tip = document.getElementById('tooltip');
     const cont = document.getElementById('canvas-container').getBoundingClientRect();
 
     if (hovered && (!hits.length || hits[0].object.userData.agentId !== hovered.id)) {
         hovered.shirtMat.emissive.setHex(0x000000);
+        if (hovered.ring) hovered.ring.scale.set(0.34, 0.34, 1);
         hovered = null;
     }
     if (hits.length) {
@@ -1708,7 +2287,10 @@ function doHover() {
         if (a) {
             if (hovered !== a) {
                 hovered = a;
-                a.shirtMat.emissive.setHex(0x2a1f0a);
+                // Fase 4: glow lebih terlihat
+                a.shirtMat.emissive.setHex(0x1a3a6e);
+                a.shirtMat.emissiveIntensity = 0.9;
+                if (a.ring) a.ring.scale.set(0.42, 0.42, 1);  // pulse ring membesar
                 playClick();
             }
             tip.style.display = 'block';
@@ -1730,6 +2312,7 @@ function handleClick(e) {
 }
 
 function focusAgent(a) {
+    if (!a || !a.group) return;   // agen yang sudah keluar tidak punya mesh
     focused = a;
     a.wave = 1.2;
     document.getElementById('focus-bar').classList.add('active');
@@ -1772,6 +2355,17 @@ function animate() {
     }
 
     agents.forEach(a => a.update(dt, t));
+
+    // Auto day/night: 1 game-hour per 10 real seconds
+    if (autoTime) {
+        timeOfDay = (timeOfDay + dt * 0.1) % 24;
+        applyTimeOfDay();
+        const label = document.getElementById('time-label');
+        if (label) label.textContent = String(Math.floor(timeOfDay)).padStart(2, '0') + ':' + String(Math.floor((timeOfDay % 1) * 60)).padStart(2, '0');
+    }
+
+    updateSteam(dt, t);
+    updateConfetti(dt);
 
     if (dustPts) {
         const arr = dustPts.geometry.attributes.position.array;
@@ -1846,6 +2440,7 @@ function startMeeting() {
     meeting.speaker = 0;
     let i = 0;
     agents.forEach(a => {
+        if (!a.group || a.exitWalk || a.disposed) return;   // lewati agen yang sudah keluar
         const idx = i++;
         const s = meetSpot(idx);
         a.meeting = true;
@@ -1873,6 +2468,8 @@ function speakNext() {
     a.bubbleDotPhase = 0;
     a.drawBubble();
     a.wave = 0.8;
+    // Fase 3: speaker nod (angguk) — animasi kepala singkat
+    a.nodT = 1.4;
 }
 
 function endMeeting() {
@@ -1914,12 +2511,19 @@ function setConn(ok) {
 
 function handleWS({ type, agent, agentId, agents: list }) {
     switch (type) {
-        case 'init': (list || []).forEach(a => addAgent(a)); break;
+        case 'init':
+            (list || []).forEach(a => {
+                if (a.status === 'completed' || a.status === 'error') {
+                    addRecord(a);   // record saja — jangan hidupkan lagi yang sudah selesai
+                } else addAgent(a);
+            });
+            renderAgents();
+            break;
         case 'agent_spawn':
             addAgent(agent); playSpawn();
             addGlobalLog(`${agent.name} mulai â€” "${agent.task}"`);
             break;
-        case 'agent_update': updateAgent(agent); break;
+        case 'agent_update': updateAgent(agent); if (typeof drawTVWall === 'function') drawTVWall(); break;
         case 'agent_complete':
             updateAgent(agent);
             if (agent.status === 'completed') {
@@ -1930,14 +2534,16 @@ function handleWS({ type, agent, agentId, agents: list }) {
                 addGlobalLog(`${agent.name} gagal`);
                 showToast(agent, 'error');
             }
+            {
+                // jangan lenyapkan mendadak — jalankan keluar lewat pintu dulu
+                if (agent) scheduleExit(agent.id);
+            }
             break;
         case 'agent_removed': {
-            const a = agents.get(agentId);
+            const a = findAgent(agentId);
             if (a) {
-                if (focused === a) clearFocus();
-                if (hovered === a) hovered = null;
-                addGlobalLog(`${a.name} keluar kantor`);
-                a.dispose(); agents.delete(agentId); renderAgents();
+                if (!a.exitWalk && !a.exitPending) addGlobalLog(`${a.name} keluar kantor`);
+                finishExit(a.id);
             }
             break;
         }
@@ -1957,6 +2563,30 @@ function addAgent(data) {
         a.walkLane(spot.x, spot.z + 1.15);
     }
     renderAgents();
+}
+
+// record tanpa mesh: dipakai untuk agen yang sudah selesai / sudah keluar,
+// supaya kartu & laporan di sidebar tetap ada tanpa menghidupkan figur lagi.
+function addRecord(data) {
+    if (agents.has(data.id)) return;
+    const a = Object.create(Agent3D.prototype);
+    a.id = data.id;
+    a.name = data.name;
+    a.role = data.role || 'Developer';
+    a.task = data.task || '';
+    a.status = data.status || 'completed';
+    a.progress = data.progress || 100;
+    a.logs = data.logs || [];
+    a.output = data.output || '';
+    a.duration = data.duration;
+    a.exitPending = false;
+    a.exitWalk = false;
+    a.exitWatchdog = null;
+    a.disposed = true;   // tidak punya mesh → tidak ikut update/hover/fokus
+    a.exited = true;     // sudah tidak ada di ruangan (record/laporan tetap tampil)
+    a.group = null;
+    agents.set(a.id, a);
+    return a;
 }
 
 function updateAgent(data) {
@@ -1987,7 +2617,54 @@ function switchTab(name) {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase().includes(name === 'agents' ? 'agen' : name)));
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.getElementById(`tab-${name}`).classList.add('active');
+    if (name === 'logs') drawActivityChart();
     playClick();
+}
+
+// ---------- Fase 5: grafik aktivitas spawn per jam ----------
+let activityTimer = null;
+function drawActivityChart() {
+    const cv = document.getElementById('activity-chart');
+    if (!cv) return;
+    fetch(`${API_URL}/api/activity`).then(r => r.json()).then(j => {
+        const data = j.hours || [];
+        const ctx = cv.getContext('2d');
+        const W = cv.width, H = cv.height;
+        ctx.clearRect(0, 0, W, H);
+        const pad = { l: 8, r: 8, t: 10, b: 18 };
+        const chartW = W - pad.l - pad.r, chartH = H - pad.t - pad.b;
+        const max = Math.max(1, ...data.map(h => h.spawns));
+        const bw = chartW / data.length;
+
+        // grid baseline
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath(); ctx.moveTo(pad.l, pad.t + chartH); ctx.lineTo(pad.l + chartW, pad.t + chartH); ctx.stroke();
+
+        data.forEach((h, i) => {
+            const bh = (h.spawns / max) * (chartH - 6);
+            const x = pad.l + i * bw;
+            // bar
+            ctx.fillStyle = h.spawns ? 'rgba(59,130,246,0.85)' : 'rgba(255,255,255,0.10)';
+            const barH = h.spawns ? Math.max(bh, 3) : 2;
+            ctx.beginPath();
+            ctx.roundRect(x + 1, pad.t + chartH - barH, bw - 2, barH, 2);
+            ctx.fill();
+            // label jam tiap 4 jam
+            if (i % 4 === 0) {
+                ctx.fillStyle = '#6b7280';
+                ctx.font = '9px system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(h.label.slice(0, 2), x + bw / 2, H - 4);
+            }
+        });
+
+        // total badge
+        const total = data.reduce((s, h) => s + h.spawns, 0);
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${total} spawn / 24j`, W - pad.r, pad.t + 8);
+    }).catch(() => {});
 }
 
 function updateStats() {
@@ -2053,13 +2730,15 @@ function renderAgents() {
         const card = document.createElement('div');
         card.className = `agent-card ${a.status}`;
         card.onclick = () => { focusAgent(a); openModal(a); playClick(); };
+        const place = a.exitWalk ? 'keluar' : (a.exited ? 'sudah keluar' : 'di ruangan');
         card.innerHTML =
             `<div class="agent-header"><div class="agent-avatar" style="background:${rc.css}">${esc(initials(a.name))}</div>` +
             `<div><div class="agent-name">${esc(a.name)}</div><div class="agent-role">${esc(a.role)}</div></div></div>` +
             `<div class="agent-task">${esc(a.task)}</div>` +
             `<div class="agent-footer"><span class="agent-status status-${a.status}">${esc(a.status)}</span>` +
             `<span>${Math.round(a.progress)}%</span></div>` +
-            `<div class="agent-progress"><div class="agent-progress-bar" style="width:${a.progress}%"></div></div>`;
+            `<div class="agent-progress"><div class="agent-progress-bar" style="width:${a.progress}%"></div></div>` +
+            `<div class="agent-place">${place}</div>`;
         list.appendChild(card);
     });
     updateStats();

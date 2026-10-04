@@ -280,6 +280,20 @@ app.post('/api/demo', (req, res) => {
     res.json({ success: true, spawned });
 });
 
+// Fase 5: histogram aktivitas spawn agen per jam (24 jam terakhir)
+app.get('/api/activity', (req, res) => {
+    const hours = Array.from({ length: 24 }, (_, i) => {
+        const d = new Date();
+        d.setHours(d.getHours() - (23 - i), 0, 0, 0);
+        return { hour: d.getHours(), label: String(d.getHours()).padStart(2, '0') + ':00', spawns: 0 };
+    });
+    agents.forEach(a => {
+        const hoursAgo = a.startTime ? Math.floor((Date.now() - a.startTime) / 3600000) : -1;
+        if (hoursAgo >= 0 && hoursAgo < 24) hours[23 - hoursAgo].spawns++;
+    });
+    res.json({ hours });
+});
+
 app.get('/api/agent/:id', (req, res) => {
     const agentId = parseInt(req.params.id);
     const agent = agents.get(agentId);
